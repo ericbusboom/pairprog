@@ -4,51 +4,14 @@ from typing import List, Optional
 
 import openai
 import tiktoken
-import typesense
 from alive_progress import alive_bar
 
 from .objectstore import ObjectStore, resolve_cache
-from .util import generate_tools_specification
 
 # from pydantic import BaseModel, Field
 
 
-class Functions:
-    def __init__(self):
-        self.client = typesense.Client(
-            {
-                "api_key": "xyz",
-                "nodes": [{"host": "barker", "port": "8108", "protocol": "http"}],
-                "connection_timeout_seconds": 1,
-            }
-        )
-
-    def search_job(self, title: str, description: str) -> object:
-        """Search for a job experience by title and description.
-
-        This function searches for a job experience based on a given title and description.
-        It returns an Experience object that matches the search criteria.
-
-        Args:
-            title (str): The title of the job experience to search for. This should be a
-                         string representing the job title, such as 'Software Engineer' or 'Data Analyst'.
-            description (str): The description of the job experience to search for. This should
-                               be a detailed string describing the job role, responsibilities, or
-                               any specific details relevant to the search.
-
-        Returns:
-            matches: a table, in dict "records" orientation,  of matching job experiences, sorted by relevance.
-        """
-
-        r = self.sec.job_search(title, description).head(10)
-        return r.to_dict(orient="records")
-
-    @classmethod
-    def tools(cls):
-        return generate_tools_specification(Functions)
-
-
-class CMechAssistant:
+class Assistant:
     def __init__(
         self,
         tools: List[dict],

@@ -12,6 +12,8 @@ typesense = "*"
 pyyaml = "*"
 openai-async = "*"
 more-itertools = "*"
+ipython = "*"
+zmq = "*"
 
 [dev-packages]
 
