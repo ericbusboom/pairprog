@@ -4,6 +4,14 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+alive-progress = "*"
+openai = "*"
+pydantic = "*"
+tiktoken = "*"
+typesense = "*"
+pyyaml = "*"
+openai-async = "*"
+more-itertools = "*"
 
 [dev-packages]
 
