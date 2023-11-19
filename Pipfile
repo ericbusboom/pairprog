@@ -1,0 +1,23 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+alive-progress = "*"
+openai = "*"
+pydantic = "*"
+tiktoken = "*"
+typesense = "*"
+pyyaml = "*"
+openai-async = "*"
+more-itertools = "*"
+ipython = "*"
+zmq = "*"
+ipykernel = "*"
+jupyter-client = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.11"
