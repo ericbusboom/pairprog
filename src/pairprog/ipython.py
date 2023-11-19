@@ -1,6 +1,7 @@
 import json
 import subprocess
 import time
+from pathlib import Path
 
 import zmq
 from jupyter_client import BlockingKernelClient
@@ -10,11 +11,11 @@ class IpyKernel:
     def __init__(self, connection_path="./.ipy_connection.json"):
         self.kernel_process = None
 
-        self.connection_path = connection_path
+        self.connection_path = Path(connection_path)
 
         self.connection = None  # Connection info for the IPython kernel
-        self.context = None  # ZeroMQ context
-        self.client = None  # ZeroMQ socket
+
+        self.client = None  # Kernel client
 
     def start(self):
         # Start the IPython kernel as a subprocess
@@ -27,8 +28,21 @@ class IpyKernel:
             stdout=subprocess.PIPE,
         )
 
-        # Wait a bit for the kernel to start and write the connection file
-        time.sleep(5)
+        while not self.connection_path.exists():
+            time.sleep(0.1)
+
+        self.client = BlockingKernelClient(connection_file=self.connection_path)
+
+        self.client.load_connection_file()
+        self.client.start_channels()
+
+    def exec(self, code):
+        while True:
+            msgid = self.client.execute(code)
+            reply = self.client.get_shell_msg(timeout=5)
+            print(reply["content"])
+            if reply["content"]["execution_state"] == "idle":
+                break
 
     def start2(self):
         # Read the connection file written by the IPython kernel
@@ -73,7 +87,7 @@ def main():
     # Start the IPython kernel
     ipy = IpyKernel()
     ipy.start()
-
+    ipy.exec('print("hello world")')
     ipy.stop()
 
 
