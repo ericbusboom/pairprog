@@ -2,91 +2,104 @@ import json
 import subprocess
 import time
 from pathlib import Path
+import atexit
 
 import zmq
 from jupyter_client import BlockingKernelClient
 
 
 class IpyKernel:
-    def __init__(self, connection_path="./.ipy_connection.json"):
+    def __init__(self, connection_path=None):
         self.kernel_process = None
 
-        self.connection_path = Path(connection_path)
+
+        if connection_path is None:
+            self.connection_path = Path.cwd().joinpath(".ipyconnection.json")
+        else:
+            self.connection_path = Path(connection_path)
+
+        self.connection_path = self.connection_path.resolve()
 
         self.connection = None  # Connection info for the IPython kernel
 
         self.client = None  # Kernel client
 
+        self.messages = {}  # Messages received from the kernel
+
     def start(self):
         # Start the IPython kernel as a subprocess
+        import sys
+        ipy_exec = Path(__file__).parent / "cli" / "ipy.py"
+
+
+        print("Starting kernel process connecting to", self.connection_path)
+
+
         self.kernel_process = subprocess.Popen(
             [
-                "ipython",
+                sys.executable,
+                str(ipy_exec),
                 "kernel",
                 f"--IPKernelApp.connection_file={self.connection_path}",
             ],
             stdout=subprocess.PIPE,
         )
 
+        print("Looking for connection file", self.connection_path)
         while not self.connection_path.exists():
             time.sleep(0.1)
 
-        self.client = BlockingKernelClient(connection_file=self.connection_path)
+        print ("connection file exists")
+
+        self.client = BlockingKernelClient(connection_file=str(self.connection_path))
 
         self.client.load_connection_file()
         self.client.start_channels()
 
     def exec(self, code):
+        from queue import Empty
+
+        msgid = self.client.execute(code)
+
+        self.messages[msgid] = []
         while True:
-            msgid = self.client.execute(code)
-            reply = self.client.get_shell_msg(timeout=5)
-            print(reply["content"])
-            if reply["content"]["execution_state"] == "idle":
+
+            try:
+                reply = self.client.get_iopub_msg(timeout=5)
+                parent = reply["parent_header"]
+                if parent.get("msg_id") == msgid:
+                    del reply["parent_header"]
+
+                    self.messages[msgid].append(reply)
+                    print(reply['msg_type'], reply["content"])
+                    if reply["content"].get("execution_state") == "idle":
+                        break
+            except Empty:
+                print("timeout")
                 break
-
-    def start2(self):
-        # Read the connection file written by the IPython kernel
-        with open(self.connection_path, "r") as f:
-            self.connection = json.load(f)
-
-        # Setup the ZeroMQ context and socket
-        self.context = zmq.Context()
-        self.client = self.context.socket(zmq.REQ)
-
-        # Connect to the IPython kernel
-        connection_string = (
-            f"tcp://{self.connection['ip']}:{self.connection['shell_port']}"
-        )
-        self.client.connect(connection_string)
 
     def stop(self):
         # Clean up: close the socket and terminate the kernel
-        self.client.close()
-        self.context.term()
-        self.kernel_process.terminate()
+
+        if self.kernel_process is not None:
+            self.kernel_process.terminate()
 
     # stop when the object is deleted
     def __del__(self):
         self.stop()
 
-    # Function to send a command to the kernel
-    def send_command(self, command):
-        # IPython kernel communication uses JSON with 'content' field for code
-        msg = json.dumps({"content": {"code": command}})
-        self.client.send_string(msg)
-
-        # Receive the reply from the kernel
-        reply = self.client.recv()
-        print("Reply:", reply)
 
 
-# main and text fuction
 
 
 def main():
     # Start the IPython kernel
+    from time import sleep
+
     ipy = IpyKernel()
     ipy.start()
+    atexit.register(ipy.stop)
+    sleep(3)
     ipy.exec('print("hello world")')
     ipy.stop()
 
