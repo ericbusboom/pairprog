@@ -35,9 +35,7 @@ def exit_(event):
 
 history_b = Buffer()
 history_b.text = to_formatted_text('History\n', 'class:myinput')
-history_w = Window(
-                    content=BufferControl(buffer=history_b)
-                )
+history_w = Window(content=BufferControl(buffer=history_b))
 progress_w = Window(height=2, content=FormattedTextControl(
                     text=to_formatted_text('Progress', 'class:myinput')))
 session = PromptSession()

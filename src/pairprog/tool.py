@@ -1,4 +1,5 @@
 import unittest
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 import json
@@ -8,7 +9,7 @@ from pairprog.ipython import IpyKernel
 from pairprog.objectstore import ObjectStore
 from pairprog.util import generate_tools_specification
 from .search import TextSearch
-
+from pairprog.filesystem import FSAccess
 
 class Tool:
     """Baseclass for AI tool"""
@@ -17,9 +18,15 @@ class Tool:
     def specification(cls):
         """Return the specification for the tools available in this class."""
         return generate_tools_specification(cls)
+
+
 from pathlib import Path
 from typesense import Client
 from typing import Any
+
+class Done(Exception):
+    """We're done with the session"""
+    pass
 
 class PPTools(Tool):
     """Functions that the AI assistant can use to run python code, remember
@@ -41,10 +48,18 @@ class PPTools(Tool):
         self.os = object_store
         self.wd = working_dir
 
-        self.ipy = IpyKernel()
-        self.ipy.start()
+        self.fs = FSAccess(self.wd)
 
-        self.library = TextSearch(self.ts_client)
+    @cached_property
+    def ipy(self) -> IpyKernel:
+        """An instance of IPython kernel."""
+        ipy =  IpyKernel()
+        ipy.start()
+        return ipy
+    @cached_property
+    def library(self) -> TextSearch:
+        """A text search engine."""
+        return TextSearch(self.ts_client)
 
     def execute_code(self, code: str) -> Any:
         """Execute a code using the IPython kernel.
@@ -62,8 +77,12 @@ class PPTools(Tool):
             the result for scalar values, or jump JSON for more complex values.
 
         """
-        mid, o = self.ipy.exec(code)
-        return o
+        try:
+            mid, o = self.ipy.exec(code)
+            v = self.get_code_var('_')
+            return v
+        except Exception as e:
+            return str(e)
 
     def get_code_var(self, varname: str) -> Any:
         """Retrieve the value of a variable from the IPython kernel as JSON.
@@ -76,7 +95,7 @@ class PPTools(Tool):
         """
         return self.ipy.get_var(varname)
 
-    def remember(self, key: str, value: Any) -> None:
+    def memorize(self, key: str, value: Any) -> None:
         """Store a value in the cache, associated with a key.
 
         Args:
@@ -125,7 +144,7 @@ class PPTools(Tool):
         Returns:
             Any: The document retrieved from the library.
         """
-        return self.library.get(key)
+        return self.library.get_document(key)
 
     def search_documents(self, query: str) -> list:
         """Search for documents in the library that match a given query.
@@ -138,10 +157,55 @@ class PPTools(Tool):
         """
         return self.library.search(query)
 
-    def done(self) -> None:
-        """Signal to the user that this session is completed."""
+    def next_step(self, text: str):
+        """Write yourself a note that will be given to you on your next invocation.
+        You can use this end the current step in a process and start a new one"""
+
+        return text
+
+    def read(self, path: str, encoding=None) -> str:
+        """
+        Read text from a file.
+
+        Args:
+            path (str): The path to the file to be read.
+            encoding (str, optional): The encoding to use for reading the file.
+
+        Returns:
+            str: The content of the file as a string.
+        """
+        return self.fs.read(path, encoding=encoding)
+
+    def write(self, path: str, b: str, encoding=None) -> None:
+        """
+        Write text to a file.
+
+        Args:
+            path (str): The path to the file to be written.
+            b (str): The text content to write to the file.
+            encoding (str, optional): The encoding to use for writing the file.
+        """
+        self.fs.write(path, b, encoding=encoding)
+
+    def ls(self, path: str) -> list:
+        """
+        List files in a directory.
+
+        Args:
+            path (str): The path to the directory.
+
+        Returns:
+            list: A list of file names in the specified directory.
+        """
+        return self.fs.ls(path)
+
 
 class TestCase(unittest.TestCase):
+
+    def test_tool_spec(self):
+        tool = PPTools(None, None, Path('/tmp/working'))
+        print(json.dumps(tool.specification(), indent=2))
+
     def test_basic(self):
 
         rc = ObjectStore.new(bucket='test', class_='FSObjectStore', path='/tmp/cache')
@@ -156,7 +220,29 @@ class TestCase(unittest.TestCase):
 
         tool = PPTools(ts, rc, Path('/tmp/working'))
 
-        print(json.dumps(tool.specification(), indent=4))
+        #print(json.dumps(tool.specification(), indent=4))
+
+        # Execute Code
+        o = tool.execute_code("a='hello world'\na\n")
+        o = tool.execute_code("print(a)")
+        self.assertEqual(o.strip(), 'hello world')
+        o = tool.get_code_var('a')
+        self.assertEqual(json.loads(o), 'hello world')
+
+        o = tool.execute_code("sum(int(digit) for digit in str(3.14159)[:6].replace('.', ''))")
+        v = tool.get_code_var('_')
+        print("v=", v)
+
+        # Search
+
+        tool.store_document('Drinking Whiskey', 'Wishkey will make you more inteligent')
+        tool.store_document('Cleaning your Ears',
+                        'If you don\'t clean your ears, you will get cancer',
+                        description='A medical article of grave importance to audiophiles')
+
+        r = tool.search_documents("How to prevent fatal diseases")
+        self.assertEqual(r[0]['title'], 'Cleaning your Ears')
+
 
 if __name__ == "__main__":
     unittest.main()

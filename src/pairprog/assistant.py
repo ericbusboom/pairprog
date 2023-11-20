@@ -1,26 +1,39 @@
 import json
 import unittest
 from typing import List, Optional, Any
-
+import logging
 import openai
 import tiktoken
 from alive_progress import alive_bar
 from .objectstore import ObjectStore, resolve_cache
-from .tool import PPTools
+from .tool import PPTools, Tool
+from .tool import Done
+
+logger = logging.getLogger(__name__)
 
 # from pydantic import BaseModel, Field
+
+def render_message_dict(m):
+
+    try:
+        d = m.choices[0].message.model_dump()
+    except AttributeError:
+        d = dict(**m)
+        d['finish_reason'] = ''
+
+    return d
 
 class Assistant:
     def __init__(
             self,
-            tools: PPTools,
+            tool: Tool,
             messages: List[dict[str, Any]] = None,
-            model="gpt-3.5-turbo-1106",
+            model= "gpt-3.5-turbo-1106",
             cache: Optional[dict | ObjectStore] = None,
             token_limit: int = 6000,  # max number of tokens to submit in messages
     ):
-        self.tools = tools  # Functions to call, and function definitions
-        self.func_spec = tools.tools()
+        self.tools = tool  # Functions to call, and function definitions
+        self.func_spec = tool.specification()
 
         self.messages = messages or []
 
@@ -54,10 +67,16 @@ class Assistant:
         """return the tail of the messages array for a number of messages that
         is less than the token limit"""
 
+        def get_content(m):
+            try:
+                return str(m.content) or ''
+            except AttributeError :
+                return str(m['content']) or ''
+
         total = 0
         msg = []
         for m in reversed(self.messages):
-            toks = len(self.tokenizer.encode(m["content"] or ""))
+            toks = len(self.tokenizer.encode(get_content(m)))
 
             if toks + total <= self.token_limit:
                 total += toks
@@ -71,7 +90,7 @@ class Assistant:
         pass
 
     def run(self, prompt: str | List[dict[str, Any]], **kwargs):
-        """Run a single completion request"""
+        """Run a  completion request loop"""
         import uuid
         from time import time
 
@@ -80,84 +99,176 @@ class Assistant:
         self.run_id = hex(int(time()))[2:] + "-" + str(uuid.uuid4())
 
         if isinstance(prompt, str):
-            self.messages.append([{"role": "user", "content": prompt}])
+            self.messages.append({"role": "user", "content": prompt})
         else:
             self.messages.extend(prompt)
 
-        with alive_bar() as bar:
-            while True:
-                try:
-                    self.messages_cache["request/" + self.run_id] = self.messages
+        logger.debug(f"Starting loop. {len(self.messages)}")
+        logger.debug(f"Last prompt: {self.messages[-1]['content'][:100]}".replace('\n', ' '))
 
+        while True:
+            try:
+                self.messages_cache["request/" + self.run_id] = self.messages
+
+                logger.debug(f"Request {self.messages[-1]['content'][:100]}".replace('\n', ' '))
+
+                try:
+                    r = None
                     r = client.chat.completions.create(
                         messages=self.limited_messages,
                         tools=self.func_spec,
                         model=self.model,
                     )
-
-                    self.responses.append(r)
-
-                    bar.text(f"{len(self.messages)} messages")
-                    bar()
-
-                    message = r.choices[0].message.model_dump()
-
-                    # GPT errs if you return a null function call when there is a tool call
-                    # I think it's all tools now, and function_call is deprecated?
-                    if "function_call" in message and message["function_call"] is None:
-                        del message["function_call"]
-
-                    self.messages.append(message)
-
-                    self.messages_cache["response/" + self.run_id] = self.messages
-
                 except Exception as e:
-                    print("!!!!!! EXCEPTION !!!!!!!")
-                    print("RUN ID", self.run_id)
-                    print(e)
-                    print("!!!!!! RESPONSE !!!!!!!")
-                    print(json.dumps(r.model_dump(), indent=2))
-                    print("!!!!!! MESSAGES !!!!!!!")
-                    print(json.dumps(self.messages, indent=2))
-
+                    logger.debug(e)
                     raise
 
-                match r.choices[0].finish_reason:
-                    case "stop" | "content_filter":
-                        self.stop()
-                        return
-                    case "length":
-                        self.stop()
-                        return
-                    case "function_call" | "tool_calls":
+                rcz = r.choices[0]
+                message = rcz.message
+                logger.debug(f"Response: {render_message_dict(r).get('content', '')}")
+                self.responses.append(r)
+
+                self.messages.append(message)
+                self.messages_cache["response/" + self.run_id] = self.messages
+
+            except Exception as e:
+                print("!!!!!! EXCEPTION !!!!!!!")
+                print("RUN ID", self.run_id)
+                print(e)
+                print("!!!!!! RESPONSE !!!!!!!")
+                print(json.dumps(r.model_dump(), indent=2) if r is not None else "NO RESPONSE")
+                print("!!!!!! MESSAGES !!!!!!!")
+                for m in self.messages:
+                    print(m)
+
+                raise
+
+            logger.debug(f"Finish reason: {rcz.finish_reason}")
+
+            match rcz.finish_reason:
+                case "stop" | "content_filter":
+                    self.stop()
+                    return
+                case "length":
+                    self.stop()
+                    return
+                case "function_call" | "tool_calls":
+                    try:
                         self.call_function(r)
-                    case "null":
-                        pass  # IDK what to do here.
+                    except Done:
+                        self.stop()
+                        return
+
+                case "null":
+                    pass  # IDK what to do here.
+
+                case _:
+                    logger.debug(f"Unknown finish reason: {rcz.finish_reason}")
+
+
+
+
+                # Default Case
+
 
     def call_function(self, response):
         """Call a function references in the response, the add the function result to the messages"""
 
         tool_calls = response.choices[0].message.tool_calls
 
+        logger.debug(f"Starting Tool calls: {tool_calls}")
+
         for tool_call in tool_calls:
+
+            logger.debug(f"Tool call: " +tool_call.function.name)
+
             f = getattr(self.tools, tool_call.function.name)
             args = json.loads(tool_call.function.arguments)
-            r = f(**args)
+
+            try:
+                r = f(**args)
+            except Exception as e:
+                logger.debug(e)
+                r = str(e)
+
+            if not isinstance(r, str):
+                r = json.dumps(r, indent=2)
+
+            toks = len(self.tokenizer.encode(r))
+
+            logger.debug(f"Tool response ({toks} tokens): " + str(r)[:100].replace('\n',''))
+
+            if toks > self.token_limit/2:
+                r='ERROR: Response too long to return to model. Try to make it smaller'
 
             m = {
                 "tool_call_id": tool_call.id,
                 "role": "tool",
                 "name": tool_call.function.name,
-                "content": json.dumps(r),
+                "content": r,
             }
 
             self.messages.append(m)
 
 
 class MyTestCase(unittest.TestCase):
-    def test_something(self):
-        pass
+    def test_basic(self):
+        import typesense
+        from pathlib import Path
 
+        logging.basicConfig()
+        logger.setLevel(logging.DEBUG)
+
+        #rc = ObjectStore.new(bucket='test', class_='FSObjectStore', path='/tmp/cache')
+
+        rc = ObjectStore.new(name='barker_minio', bucket='agent')
+
+        ts = typesense.Client(
+            {
+                "api_key": "xyz",
+                "nodes": [{"host": "barker", "port": "8108", "protocol": "http"}],
+                "connection_timeout_seconds": 1,
+            }
+        )
+
+        tool = PPTools(ts, rc, Path('/tmp/working'))
+
+        assis = Assistant(tool, cache=rc)
+
+        assis.run("Hi, can you tell me what tools you have access to?")
+
+        assis.run("What is the sum of the first five digits of pi?")
+
+    def test_codeand_store(self):
+        import typesense
+        from pathlib import Path
+
+        logging.basicConfig()
+        logger.setLevel(logging.DEBUG)
+
+        #rc = ObjectStore.new(bucket='test', class_='FSObjectStore', path='/tmp/cache')
+
+        rc = ObjectStore.new(name='barker_minio', bucket='agent')
+
+        ts = typesense.Client(
+            {
+                "api_key": "xyz",
+                "nodes": [{"host": "barker", "port": "8108", "protocol": "http"}],
+                "connection_timeout_seconds": 1,
+            }
+        )
+
+        tool = PPTools(ts, rc, Path('/Volumes/Cache/cache/scratch'))
+
+        assis = Assistant(tool, cache=rc)
+
+        #assis.run("Write a python program to get 5 cat facts from https://catfact.ninja/facts, then store"
+        #          " them as a document in the library")
+
+        #assis.run("Eric busboom has a website at ericbusboom.com. What can you tell me about him?"
+        #          "Hint: start by writing a program to get the html from the website.")
+
+        assis.run("Search your filesystem for information about eric")
 
 if __name__ == "__main__":
     unittest.main()

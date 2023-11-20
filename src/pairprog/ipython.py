@@ -29,6 +29,16 @@ class IpyKernel:
 
     def start(self):
         """Start the kernel and the client"""
+
+        from os import environ
+
+        # To supress frozen modules warning
+
+        environ['PYDEVD_DISABLE_FILE_VALIDATION'] = '1'
+
+        #import warnings;
+        #warnings.simplefilter('ignore')
+
         self.kernel_manager = KernelManager()
         self.kernel_manager.start_kernel()
         self.client = self.kernel_manager.blocking_client()
@@ -62,7 +72,7 @@ class IpyKernel:
 
         e = self.exec(code)
         try:
-            return e[1]
+            return e[1].strip()
         except Exception as e:
             logger.debug((str(e)))
             logger.debug("Response: " + str(e))
@@ -128,6 +138,7 @@ def main():
     ipy = IpyKernel()
     ipy.start()
     atexit.register(ipy.stop)
+
     sleep(3)
     mid, o = ipy.exec('word = "hello world"\nprint(word)')
     print(mid, o)

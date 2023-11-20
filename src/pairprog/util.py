@@ -10,6 +10,9 @@ from pydantic import BaseModel
 def map_types(v):
     return {
         "str": "string",
+        "int": "integer",
+        "Any": "object",
+        "list": "object",
         "Optional": "object",
     }.get(v, v)
 

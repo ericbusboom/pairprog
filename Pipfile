@@ -21,6 +21,9 @@ termcolor = "*"
 pandas = "*"
 prompt-toolkit = "*"
 python-slugify = "*"
+flatten-dict = "*"
+boto3 = "*"
+fsspec = "*"
 
 [dev-packages]
 
