@@ -165,9 +165,6 @@ class Assistant:
                 case _:
                     logger.debug(f"Unknown finish reason: {rcz.finish_reason}")
 
-
-
-
                 # Default Case
 
 
@@ -258,7 +255,7 @@ class MyTestCase(unittest.TestCase):
             }
         )
 
-        tool = PPTools(ts, rc, Path('/Volumes/Cache/cache/scratch'))
+        tool = PPTools(ts, rc, Path('/Volumes/Cache/scratch'))
 
         assis = Assistant(tool, cache=rc)
 
