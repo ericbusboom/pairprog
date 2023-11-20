@@ -64,19 +64,50 @@ class TextSearch:
         """Create a collection with the given name and schema"""
         self._create_collection(self.library_schema, delete=delete)
 
-    def add_document(self, doc):
+    def _add_document(self, doc):
         if "id" in doc:
             self.client.collections["library"].documents.upsert(id)
         else:
             self.client.collections["library"].documents.create(doc)
 
+    # Add a document from function arguments
+    def add_document(self, title: str, text: str, description=None, source=None, chunk=None, tags=None):
+        """
+        Create a dictionary with the given arguments, excluding any that are None.
+
+        :param title: Title of the item (string)
+        :param description: Description of the item (string)
+        :param source: Source of the item (string, optional)
+        :param chunk: Chunk number (int, optional)
+        :param tags: List of tags (list of strings, optional)
+        :param text: Text content (string)
+        :return: Dictionary with non-None arguments
+        """
+        args = {
+            "title": title,
+            "description": description,
+            "source": source,
+            "chunk": chunk,
+            "tags": tags,
+            "text": text
+        }
+        # Exclude keys with None values
+        return self._add_document({k: v for k, v in args.items() if v is not None})
+
     def search(self, text, tags=None):
         """Search the collection for a given query"""
 
-        query = {"q": text, "query_by": "description,embedding", "prefix": False}
+        query = {"q": text, "query_by": "title, description,embedding", "prefix": False}
 
         return self.client.collections["library"].documents.search(query)
 
+
+    def get_document(self, doc_id):
+        d = self.client.collections['library'].documents[doc_id].retrieve
+        if 'embeddings' in d:
+            del d['embeddings']
+
+        return d
 
 class TestCase(unittest.TestCase):
     def test_basic(self):
@@ -84,7 +115,7 @@ class TestCase(unittest.TestCase):
 
         ts.create_collection(delete=True)
 
-        ts.add_document(
+        ts._add_document(
             {
                 "title": "Software Engineer",
                 "description": "I am a software engineer.",
@@ -93,7 +124,7 @@ class TestCase(unittest.TestCase):
             }
         )
 
-        ts.add_document(
+        ts._add_document(
             {
                 "title": "PockiWoki",
                 "description": "Just nonsense",

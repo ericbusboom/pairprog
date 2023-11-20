@@ -1,24 +1,23 @@
 import json
 import unittest
-from typing import List, Optional
+from typing import List, Optional, Any
 
 import openai
 import tiktoken
 from alive_progress import alive_bar
-
 from .objectstore import ObjectStore, resolve_cache
+from .tool import PPTools
 
 # from pydantic import BaseModel, Field
 
-
 class Assistant:
     def __init__(
-        self,
-        tools: List[dict],
-        messages: List[dict] = None,
-        model="gpt-3.5-turbo-1106",
-        cache: Optional[dict | ObjectStore] = None,
-        token_limit: int = 6000,  # max number of tokens to submit in messages
+            self,
+            tools: PPTools,
+            messages: List[dict[str, Any]] = None,
+            model="gpt-3.5-turbo-1106",
+            cache: Optional[dict | ObjectStore] = None,
+            token_limit: int = 6000,  # max number of tokens to submit in messages
     ):
         self.tools = tools  # Functions to call, and function definitions
         self.func_spec = tools.tools()
@@ -44,8 +43,8 @@ class Assistant:
         for r in self.responses:
             sch = costs[r.model]
             cost += (
-                r.usage.prompt_tokens * sch[0] / 1000
-                + r.usage.completion_tokens / 1000 * sch[1]
+                    r.usage.prompt_tokens * sch[0] / 1000
+                    + r.usage.completion_tokens / 1000 * sch[1]
             )
 
         return cost
@@ -71,7 +70,7 @@ class Assistant:
     def stop(self):
         pass
 
-    def run(self, prompt: str | List[dict], **kwargs):
+    def run(self, prompt: str | List[dict[str, Any]], **kwargs):
         """Run a single completion request"""
         import uuid
         from time import time

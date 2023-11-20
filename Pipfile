@@ -16,6 +16,11 @@ ipython = "*"
 zmq = "*"
 ipykernel = "*"
 jupyter-client = "*"
+docstring-parser = "*"
+termcolor = "*"
+pandas = "*"
+prompt-toolkit = "*"
+python-slugify = "*"
 
 [dev-packages]
 
