@@ -1,65 +1,72 @@
+import json
+import os
 import unittest
 from functools import cached_property
-from pathlib import Path
-from typing import Any
-import json
 
+from pathlib import Path
+from typesense import Client
+from typing import Any
 import typesense
+from pairprog.filesystem import FSAccess
 from pairprog.ipython import IpyKernel
 from pairprog.objectstore import ObjectStore
 from pairprog.util import generate_tools_specification
-from .search import TextSearch
-from pairprog.filesystem import FSAccess
+from .library import Library
+
 
 class Tool:
     """Baseclass for AI tool"""
+
+    def __init__(self, working_directory: Path | str = None) -> None:
+        self.wd = None
+        self.set_working_dir(working_directory)
 
     @classmethod
     def specification(cls):
         """Return the specification for the tools available in this class."""
         return generate_tools_specification(cls)
 
+    def set_working_dir(self, working_directory):
+        self.wd = Path(working_directory)
+        # Change the working directory
+        os.chdir(self.wd)
 
-from pathlib import Path
-from typesense import Client
-from typing import Any
 
 class Done(Exception):
     """We're done with the session"""
     pass
 
+
 class PPTools(Tool):
     """Functions that the AI assistant can use to run python code, remember
     facts and store, search and retrieve documents.
 
-    Attributes:
-        ts_client (Client): Client to interact with the typesense server.
-        os (ObjectStore): An object store for storing various objects.
-        wd (Path): Working directory path.
-        ipy (IpyKernel): An instance of IPython kernel.
-        library (TextSearch): A text search engine.
+
     """
 
     def __init__(self,
                  typesense_client: Client,
                  object_store: ObjectStore,
                  working_dir: Path) -> None:
+
+        super().__init__(working_dir)
+
         self.ts_client = typesense_client
         self.os = object_store
-        self.wd = working_dir
 
         self.fs = FSAccess(self.wd)
 
     @cached_property
     def ipy(self) -> IpyKernel:
         """An instance of IPython kernel."""
-        ipy =  IpyKernel()
+        ipy = IpyKernel()
         ipy.start()
         return ipy
+
     @cached_property
-    def library(self) -> TextSearch:
+    def library(self) -> Library:
         """A text search engine."""
-        return TextSearch(self.ts_client)
+        return Library(self.ts_client)
 
     def execute_code(self, code: str) -> Any:
         """Execute a code using the IPython kernel.
@@ -203,11 +210,10 @@ class PPTools(Tool):
 class TestCase(unittest.TestCase):
 
     def test_tool_spec(self):
-        tool = PPTools(None, None, Path('/tmp/working'))
+        tool = PPTools(None, None, Path('/Volumes/Cache/scratch'))
         print(json.dumps(tool.specification(), indent=2))
 
     def test_basic(self):
-
         rc = ObjectStore.new(bucket='test', class_='FSObjectStore', path='/tmp/cache')
 
         ts = typesense.Client(
@@ -218,16 +224,16 @@ class TestCase(unittest.TestCase):
             }
         )
 
-        tool = PPTools(ts, rc, Path('/tmp/working'))
+        tool = PPTools(ts, rc, Path('/Volumes/Cache/scratch'))
 
-        #print(json.dumps(tool.specification(), indent=4))
+        # print(json.dumps(tool.specification(), indent=4))
 
         # Execute Code
         o = tool.execute_code("a='hello world'\na\n")
         o = tool.execute_code("print(a)")
         self.assertEqual(o.strip(), 'hello world')
         o = tool.get_code_var('a')
-        self.assertEqual(json.loads(o), 'hello world')
+        self.assertEqual(o, 'hello world')
 
         o = tool.execute_code("sum(int(digit) for digit in str(3.14159)[:6].replace('.', ''))")
         v = tool.get_code_var('_')
@@ -237,8 +243,8 @@ class TestCase(unittest.TestCase):
 
         tool.store_document('Drinking Whiskey', 'Wishkey will make you more inteligent')
         tool.store_document('Cleaning your Ears',
-                        'If you don\'t clean your ears, you will get cancer',
-                        description='A medical article of grave importance to audiophiles')
+                            'If you don\'t clean your ears, you will get cancer',
+                            description='A medical article of grave importance to audiophiles')
 
         r = tool.search_documents("How to prevent fatal diseases")
         self.assertEqual(r[0]['title'], 'Cleaning your Ears')

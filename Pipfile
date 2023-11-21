@@ -24,6 +24,10 @@ python-slugify = "*"
 flatten-dict = "*"
 boto3 = "*"
 fsspec = "*"
+langchain = "*"
+pypdf2 = "*"
+markdownify = "*"
+textract = "*"
 
 [dev-packages]
 

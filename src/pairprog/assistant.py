@@ -8,6 +8,11 @@ from alive_progress import alive_bar
 from .objectstore import ObjectStore, resolve_cache
 from .tool import PPTools, Tool
 from .tool import Done
+import uuid
+from datetime import datetime
+from itertools import count
+import os
+
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +23,7 @@ def render_message_dict(m):
     try:
         d = m.choices[0].message.model_dump()
     except AttributeError:
+        raise
         d = dict(**m)
         d['finish_reason'] = ''
 
@@ -27,6 +33,7 @@ class Assistant:
     def __init__(
             self,
             tool: Tool,
+            working_directory: str = None, # Path to a working directory
             messages: List[dict[str, Any]] = None,
             model= "gpt-3.5-turbo-1106",
             cache: Optional[dict | ObjectStore] = None,
@@ -37,15 +44,28 @@ class Assistant:
 
         self.messages = messages or []
 
-        self.cache = resolve_cache(cache)
-        self.messages_cache = self.cache.sub("messages")
-
         self.run_id = None
 
         self.responses = []
         self.model = model
         self.token_limit = token_limit
         self.tokenizer = tiktoken.encoding_for_model(self.model)
+
+        self.session_id = datetime.now().isoformat()+'-'+str(uuid.uuid4())
+
+        self.cache = resolve_cache(cache)
+        self.session_cache = self.cache.sub("session/" + self.session_id)
+        self.file_cache = self.session_cache.sub("files")
+
+        self.wd = working_directory or os.getcwd()
+        os.chdir(self.wd)
+        self.tools.set_working_dir(self.wd)
+
+        self.streaming = True
+
+        self.client  = openai.OpenAI()
+
+        self.iter_key = lambda v: f"/none/{v}"
 
     @property
     def cost(self):
@@ -61,6 +81,12 @@ class Assistant:
             )
 
         return cost
+
+    @property
+    def last_content(self):
+        """Return the last content"""
+
+        return self.messages[-1].content
 
     @property
     def limited_messages(self):
@@ -89,14 +115,59 @@ class Assistant:
     def stop(self):
         pass
 
-    def run(self, prompt: str | List[dict[str, Any]], **kwargs):
+    def complete_streaming(self, messages: List[dict[str, Any]], callback):
+
+        r = self.client.chat.completions.create(
+            messages=messages,
+            tools=self.func_spec,
+            model=self.model,
+            stream=True
+        )
+
+        chunks = []
+        messages = []
+        deltas = []
+
+        content = ''
+        tool_calls = None
+        for chunk in r:
+            chunks.append(chunk)
+            delta = chunk.choices[0].delta
+            if delta is not None:
+                content += delta.content if delta.content is not None else ''
+                deltas.append(delta)
+
+            if delta.tool_calls is not None and tool_calls is None:
+                tool_calls = delta.tool_calls
+
+            callback(delta)
+
+        message = deltas[0]
+        message.content = content
+        message.tool_calls = tool_calls
+
+        resp = chunks[-1]
+        resp.choices[0].message = message
+        resp.choices[0].delta = None
+
+        return message, resp
+
+    def complete_blocking(self, messages):
+
+        r = self.client.chat.completions.create(
+            messages=messages,
+            tools=self.func_spec,
+            model=self.model,
+            stream=False
+        )
+
+        message = r.choices[0].message
+
+        return message, r
+
+
+    def run(self, prompt: str | List[dict[str, Any]], streaming=True, **kwargs) -> str :
         """Run a  completion request loop"""
-        import uuid
-        from time import time
-
-        client = openai.OpenAI()
-
-        self.run_id = hex(int(time()))[2:] + "-" + str(uuid.uuid4())
 
         if isinstance(prompt, str):
             self.messages.append({"role": "user", "content": prompt})
@@ -106,58 +177,52 @@ class Assistant:
         logger.debug(f"Starting loop. {len(self.messages)}")
         logger.debug(f"Last prompt: {self.messages[-1]['content'][:100]}".replace('\n', ' '))
 
-        while True:
-            try:
-                self.messages_cache["request/" + self.run_id] = self.messages
+        for iteration in count():
 
-                logger.debug(f"Request {self.messages[-1]['content'][:100]}".replace('\n', ' '))
+            self.iter_key = lambda v: f"/loop/{v}/{iteration:03d}"
 
-                try:
-                    r = None
-                    r = client.chat.completions.create(
-                        messages=self.limited_messages,
-                        tools=self.func_spec,
-                        model=self.model,
-                    )
-                except Exception as e:
-                    logger.debug(e)
-                    raise
+            self.session_cache['messages'] = self.messages
 
-                rcz = r.choices[0]
-                message = rcz.message
-                logger.debug(f"Response: {render_message_dict(r).get('content', '')}")
-                self.responses.append(r)
+            logger.debug(f"Request {self.messages[-1]['content'][:100]}".replace('\n', ' '))
 
-                self.messages.append(message)
-                self.messages_cache["response/" + self.run_id] = self.messages
+            self.session_cache[self.iter_key('pre')] = {
+                'messages': self.messages,
+                'limited_messages': self.limited_messages,
+                'tools': self.func_spec,
+            }
 
-            except Exception as e:
-                print("!!!!!! EXCEPTION !!!!!!!")
-                print("RUN ID", self.run_id)
-                print(e)
-                print("!!!!!! RESPONSE !!!!!!!")
-                print(json.dumps(r.model_dump(), indent=2) if r is not None else "NO RESPONSE")
-                print("!!!!!! MESSAGES !!!!!!!")
-                for m in self.messages:
-                    print(m)
+            def cb(delta):
+                if delta.content:
+                    print(delta.content, end='')
 
-                raise
+            if streaming:
+                message, r = self.complete_streaming(self.limited_messages, cb)
+            else:
+                message, r = self.complete_blocking(self.limited_messages)
 
-            logger.debug(f"Finish reason: {rcz.finish_reason}")
+            finish_reason = r.choices[0].finish_reason
+            logger.debug(f"Finish reason: {finish_reason}")
+            logger.debug(f"Response: {message}")
 
-            match rcz.finish_reason:
+            self.responses.append(r)
+            self.messages.append(message)
+
+            self.session_cache['messages'] = self.messages
+            self.session_cache['responses'] = self.responses
+
+            match finish_reason:
                 case "stop" | "content_filter":
                     self.stop()
-                    return
+                    return self.last_content
                 case "length":
                     self.stop()
-                    return
+                    return self.last_content
                 case "function_call" | "tool_calls":
                     try:
                         self.call_function(r)
                     except Done:
                         self.stop()
-                        return
+                        return self.last_content
 
                 case "null":
                     pass  # IDK what to do here.
@@ -179,32 +244,37 @@ class Assistant:
 
             logger.debug(f"Tool call: " +tool_call.function.name)
 
-            f = getattr(self.tools, tool_call.function.name)
-            args = json.loads(tool_call.function.arguments)
+            m = {
+                "tool_call_id": tool_call.id,
+                "role": "tool",
+                "name": tool_call.function.name,
+                "content": None
+            }
 
             try:
+                f = getattr(self.tools, tool_call.function.name)
+                args = json.loads(tool_call.function.arguments)
                 r = f(**args)
             except Exception as e:
-                logger.debug(e)
-                r = str(e)
+                logger.error(e)
+                m['content'] = str(e)
+                self.messages.append(m)
+                continue
 
             if not isinstance(r, str):
                 r = json.dumps(r, indent=2)
 
             toks = len(self.tokenizer.encode(r))
 
+            m['content'] = r
+            self.session_cache[self.iter_key('tool_call')] = m
+
             logger.debug(f"Tool response ({toks} tokens): " + str(r)[:100].replace('\n',''))
 
             if toks > self.token_limit/2:
                 r='ERROR: Response too long to return to model. Try to make it smaller'
 
-            m = {
-                "tool_call_id": tool_call.id,
-                "role": "tool",
-                "name": tool_call.function.name,
-                "content": r,
-            }
-
+            m['content'] = r
             self.messages.append(m)
 
 
@@ -228,7 +298,7 @@ class MyTestCase(unittest.TestCase):
             }
         )
 
-        tool = PPTools(ts, rc, Path('/tmp/working'))
+        tool = PPTools(ts, rc.sub('pptools'), Path('/tmp/working'))
 
         assis = Assistant(tool, cache=rc)
 
@@ -243,8 +313,6 @@ class MyTestCase(unittest.TestCase):
         logging.basicConfig()
         logger.setLevel(logging.DEBUG)
 
-        #rc = ObjectStore.new(bucket='test', class_='FSObjectStore', path='/tmp/cache')
-
         rc = ObjectStore.new(name='barker_minio', bucket='agent')
 
         ts = typesense.Client(
@@ -255,15 +323,9 @@ class MyTestCase(unittest.TestCase):
             }
         )
 
-        tool = PPTools(ts, rc, Path('/Volumes/Cache/scratch'))
+        tool = PPTools(ts, rc.sub('pptools'), Path('/Volumes/Cache/scratch'))
 
         assis = Assistant(tool, cache=rc)
-
-        #assis.run("Write a python program to get 5 cat facts from https://catfact.ninja/facts, then store"
-        #          " them as a document in the library")
-
-        #assis.run("Eric busboom has a website at ericbusboom.com. What can you tell me about him?"
-        #          "Hint: start by writing a program to get the html from the website.")
 
         assis.run("Search your filesystem for information about eric")
 

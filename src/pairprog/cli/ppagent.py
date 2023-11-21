@@ -2,10 +2,14 @@
 
 """
 import argparse
+
 import logging
 import sys
 from pathlib import Path
 from typing import List
+# noinspection PyUnresolvedReferences
+import readline
+import signal
 
 import typesense
 from pairprog import __version__
@@ -13,35 +17,11 @@ from pairprog.assistant import Assistant
 from pairprog.objectstore import ObjectStore
 from pairprog.tool import PPTools
 
-import atexit
-import os
-import readline
-
-
 __author__ = "Eric Busboom"
 __copyright__ = "Eric Busboom"
 __license__ = "MIT"
 
 _logger = logging.getLogger(__name__)
-
-
-histfile = os.path.join(os.path.expanduser("~"), ".ppa-history")
-
-try:
-    readline.read_history_file(histfile)
-    h_len = readline.get_current_history_length()
-except FileNotFoundError:
-    open(histfile, 'wb').close()
-    h_len = 0
-
-def save(prev_h_len, histfile):
-    new_h_len = readline.get_current_history_length()
-    readline.set_history_length(1000)
-    readline.append_history_file(new_h_len - prev_h_len, histfile)
-
-atexit.register(save, h_len, histfile)
-
-
 
 def parse_args(args):
     """Parse command line parameters
@@ -53,13 +33,28 @@ def parse_args(args):
     Returns:
       :obj:`argparse.Namespace`: command line parameters namespace
     """
-    parser = argparse.ArgumentParser(description="Just a Fibonacci demonstration")
+    parser = argparse.ArgumentParser(description="Pair Programming Assistant")
+
+    parser.add_argument(
+        "-D",
+        "--delete",
+        help="Delete all documents in the library",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "-L",
+        "--list",
+        help="List documents in the library",
+        action="store_true",
+    )
+
     parser.add_argument(
         "--version",
         action="version",
         version=f"pairprog {__version__}",
     )
-    parser.add_argument(dest="n", help="n-th Fibonacci number", type=int, metavar="INT")
+
     parser.add_argument(
         "-v",
         "--verbose",
@@ -76,6 +71,9 @@ def parse_args(args):
         action="store_const",
         const=logging.DEBUG,
     )
+
+    parser.add_argument(dest="prompt", help="Initial prompt", nargs='?', type=str)
+
     return parser.parse_args(args)
 
 
@@ -90,13 +88,7 @@ def setup_logging(loglevel):
         level=loglevel, stream=sys.stdout, format=logformat, datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-
-def main(args):
-    """
-    """
-    args = parse_args(args)
-    setup_logging(args.loglevel)
-
+def init():
     rc = ObjectStore.new(name='barker_minio', bucket='agent')
 
     ts = typesense.Client(
@@ -107,11 +99,45 @@ def main(args):
         }
     )
 
-    tool = PPTools(ts, rc, Path('/Volumes/Cache/scratch'))
+    tool = PPTools(ts, rc.sub('pptools'), Path('/Volumes/Cache/scratch'))
 
     assis = Assistant(tool, cache=rc)
 
-    assis.run("Search your filesystem for information about eric")
+    return assis
+
+def signal_handler(sig, frame):
+    print("\nExiting the program.")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+
+def main(args):
+    """
+    """
+    args = parse_args(args)
+    setup_logging(args.loglevel)
+
+    assist = init()
+
+    if args.delete:
+        assist.tools.library.clear_collection()
+        return
+    elif args.list:
+        for doc in assist.tools.library.list():
+            print(doc)
+        return
+    elif args.prompt:
+
+        line = ' '.join(args.prompt)
+        while True:
+            if line.strip():
+                print(assist.run(line))
+
+            line = input('$> ')
+            if line == 'stop':
+                break
+
+
 
 
 def run():

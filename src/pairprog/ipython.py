@@ -2,7 +2,8 @@ import atexit
 import logging
 from collections import defaultdict
 from textwrap import dedent
-
+import codecs
+import pickle
 from jupyter_client import KernelManager
 
 logger = logging.getLogger(__name__)
@@ -61,18 +62,18 @@ class IpyKernel:
             self.kernel_manager = None
 
     def get_var(self, varname):
-        """Return a named variable from the kernel in json format.
-        Pandas dataframes and most variables will be returned as json, if possible
-                strings will be returned as strings, and on error, just use repr()"""
+        """Return a named variable from the kernel"""
 
         code = f"""
-        from pairprog import serialize
-        print(serialize({varname}))
+        import codecs
+        import pickle
+        print(codecs.encode(pickle.dumps({varname}), "base64").decode());
         """
 
         e = self.exec(code)
         try:
-            return e[1].strip()
+            pickled =  e[1].strip()
+            return pickle.loads(codecs.decode(pickled.encode(), "base64"))
         except Exception as e:
             logger.debug((str(e)))
             logger.debug("Response: " + str(e))
