@@ -50,6 +50,14 @@ def parse_args(args):
     )
 
     parser.add_argument(
+        "-C",
+        "--count",
+        help="List documents in the library",
+        action="store_true",
+    )
+
+
+    parser.add_argument(
         "--version",
         action="version",
         version=f"pairprog {__version__}",
@@ -125,6 +133,9 @@ def main(args):
     elif args.list:
         for doc in assist.tools.library.list():
             print(doc)
+        return
+    elif args.count:
+        print(assist.tools.library.count(),"documents")
         return
     elif args.prompt:
 
