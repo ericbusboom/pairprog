@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 import tiktoken
 logger = logging.getLogger(__name__)
 from more_itertools import chunked
+import json
 
 def extract_text_from_pdf_bytes(pdf_bytes):
     """
@@ -239,13 +240,18 @@ class Library:
 
     def clear_collection(self):
         """Clear the collection"""
-        self.client.collections["library"].documents.delete({"filter_by": "id:*"})
+        return self.client.collections["library"].documents.delete({"filter_by": "id:>0"})
 
     def list(self):
         """List all documents in the collection"""
         r = self.client.collections["library"].documents.export()
+        for e in r.splitlines():
+            d = json.loads(e)
+            del d['embedding']
 
-        return r
+            d = {key: d[key] for key in sorted(d.keys())}
+
+            yield d
 
     def count(self):
         return len(self.list())

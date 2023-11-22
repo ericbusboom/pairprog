@@ -19,15 +19,20 @@ logger = logging.getLogger(__name__)
 # from pydantic import BaseModel, Field
 
 def render_message_dict(m):
+    from openai.types.chat.chat_completion_chunk import ChoiceDelta
 
-    try:
-        d = m.choices[0].message.model_dump()
-    except AttributeError:
-        raise
-        d = dict(**m)
-        d['finish_reason'] = ''
+    if isinstance(m, dict):
+        pass
+    elif isinstance(m, ChoiceDelta):
+        m = m.model_dump()
 
-    return d
+    if 'function_call' in m:
+        del m['function_call']
+
+    if 'tool_calls' in m and not m['tool_calls']:
+        del m['tool_calls']
+
+    return m
 
 class Assistant:
     def __init__(
@@ -88,29 +93,37 @@ class Assistant:
 
         return self.messages[-1].content
 
-    @property
-    def limited_messages(self):
-        """return the tail of the messages array for a number of messages that
-        is less than the token limit"""
-
+    def _limited_messages(self, messages= None):
         def get_content(m):
             try:
                 return str(m.content) or ''
             except AttributeError :
                 return str(m['content']) or ''
 
+        if messages is None:
+            messages = self.messages
+
         total = 0
         msg = []
-        for m in reversed(self.messages):
+        for m in reversed(messages):
             toks = len(self.tokenizer.encode(get_content(m)))
 
             if toks + total <= self.token_limit:
                 total += toks
+                if not isinstance(m, dict):
+                    m = render_message_dict(m)
                 msg.insert(0, m)
             else:
                 break
 
         return msg
+
+    @property
+    def limited_messages(self):
+        """return the tail of the messages array for a number of messages that
+        is less than the token limit"""
+
+        return self._limited_messages(self.messages)
 
     def stop(self):
         pass
@@ -130,21 +143,39 @@ class Assistant:
 
         content = ''
         tool_calls = None
-        for chunk in r:
+        for i, chunk in enumerate(r):
+            #logger.debug(f"Streaming chunk #{i}: {chunk}")
             chunks.append(chunk)
             delta = chunk.choices[0].delta
+
+            # Store the content of the message, which comes bit by bit.
             if delta is not None:
                 content += delta.content if delta.content is not None else ''
                 deltas.append(delta)
 
-            if delta.tool_calls is not None and tool_calls is None:
-                tool_calls = delta.tool_calls
+            # Tool calls are also streamed! But only the first one has a name
+            chunk_tc = chunk.choices[0].delta.tool_calls
+
+            if chunk_tc and len(chunk_tc) > 0:
+                logger.debug(f"Tool calls chunk #{i}: {chunk_tc}")
+                if chunk_tc[0].function.name is not None:
+                    # Setup the initial tool calls
+                    #assert i == 0, "Tool calls should only be in the first chunk"
+                    tool_calls = chunk_tc
+                else:
+                    # Add a chunk to the arguments
+                    for i, tc in enumerate(chunk_tc):
+                        tool_calls[i].function.arguments += tc.function.arguments
 
             callback(delta)
+
+        self.session_cache[self.iter_key('chunks')] = chunks
 
         message = deltas[0]
         message.content = content
         message.tool_calls = tool_calls
+
+        logger.info(f'Tool calls {tool_calls}')
 
         resp = chunks[-1]
         resp.choices[0].message = message
@@ -182,6 +213,7 @@ class Assistant:
             self.iter_key = lambda v: f"/loop/{v}/{iteration:03d}"
 
             self.session_cache['messages'] = self.messages
+            self.session_cache['limited_messages'] = self.limited_messages
 
             logger.debug(f"Request {self.messages[-1]['content'][:100]}".replace('\n', ' '))
 
@@ -251,13 +283,16 @@ class Assistant:
                 "content": None
             }
 
+            self.session_cache[self.iter_key('tool_call')] = {**m, "when":"pre"}
+
             try:
                 f = getattr(self.tools, tool_call.function.name)
                 args = json.loads(tool_call.function.arguments)
                 r = f(**args)
             except Exception as e:
-                logger.error(e)
-                m['content'] = str(e)
+                e_msg = f"Failed to call tool '{tool_call.function.name}' with args '{tool_call.function.arguments}': {e} "
+                logger.error(e_msg)
+                m['content'] = str(e_msg)
                 self.messages.append(m)
                 continue
 
@@ -267,7 +302,7 @@ class Assistant:
             toks = len(self.tokenizer.encode(r))
 
             m['content'] = r
-            self.session_cache[self.iter_key('tool_call')] = m
+            self.session_cache[self.iter_key('tool_call')] = {**m, "when":"post"}
 
             logger.debug(f"Tool response ({toks} tokens): " + str(r)[:100].replace('\n',''))
 

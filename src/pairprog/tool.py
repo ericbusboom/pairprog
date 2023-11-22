@@ -206,6 +206,16 @@ class PPTools(Tool):
         """
         return self.fs.ls(path)
 
+    def hello(self, what: str):
+        """Say hello to someone.
+
+        Args:
+            what (str): The name of the person to say hello to.
+
+        Returns:
+            str: A greeting.
+        """
+        return f"Hello {what}!"
 
 class TestCase(unittest.TestCase):
 

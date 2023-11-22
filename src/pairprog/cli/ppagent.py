@@ -17,6 +17,10 @@ from pairprog.assistant import Assistant
 from pairprog.objectstore import ObjectStore
 from pairprog.tool import PPTools
 
+
+from pairprog.assistant import logger as ass_logger
+
+
 __author__ = "Eric Busboom"
 __copyright__ = "Eric Busboom"
 __license__ = "MIT"
@@ -56,6 +60,12 @@ def parse_args(args):
         action="store_true",
     )
 
+    parser.add_argument(
+        "-o",
+        "--once",
+        help="Just run the command line request; don't loop",
+        action="store_true",
+    )
 
     parser.add_argument(
         "--version",
@@ -80,7 +90,7 @@ def parse_args(args):
         const=logging.DEBUG,
     )
 
-    parser.add_argument(dest="prompt", help="Initial prompt", nargs='?', type=str)
+    parser.add_argument(dest="prompt", help="Initial prompt", nargs='*', type=str)
 
     return parser.parse_args(args)
 
@@ -91,10 +101,9 @@ def setup_logging(loglevel):
     Args:
       loglevel (int): minimum loglevel for emitting messages
     """
-    logformat = "[%(asctime)s] %(levelname)s:%(name)s:%(message)s"
-    logging.basicConfig(
-        level=loglevel, stream=sys.stdout, format=logformat, datefmt="%Y-%m-%d %H:%M:%S"
-    )
+    #logformat = "[%(asctime)s] %(levelname)s:%(name)s:%(message)s"
+    logging.basicConfig( )
+    ass_logger.setLevel(loglevel or logging.FATAL)
 
 def init():
     rc = ObjectStore.new(name='barker_minio', bucket='agent')
@@ -128,12 +137,11 @@ def main(args):
     assist = init()
 
     if args.delete:
-        assist.tools.library.clear_collection()
+        print(assist.tools.library.clear_collection())
         return
     elif args.list:
-        for doc in assist.tools.library.list():
-            print(doc)
-        return
+        for d in  assist.tools.library.list():
+            print(f"{d['id']:>4s}:{d['chunk']:<05d} {d['title'][:20]:20s} {d.get('description','')[:50]:50s} {d.get('source','')[:15]}")
     elif args.count:
         print(assist.tools.library.count(),"documents")
         return
@@ -142,13 +150,18 @@ def main(args):
         line = ' '.join(args.prompt)
         while True:
             if line.strip():
-                print(assist.run(line))
+                r = assist.run(line)
+                if False: # When streaming, output is done in the run loop
+                    print(r)
+                else:
+                    print()
+
+            if args.once:
+                break
 
             line = input('$> ')
             if line == 'stop':
                 break
-
-
 
 
 def run():
