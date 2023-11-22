@@ -17,9 +17,13 @@ from .library import Library
 class Tool:
     """Baseclass for AI tool"""
 
+    exclude_methods = ['__init__', 'set_working_dir', 'set_session_cache']
+
     def __init__(self, working_directory: Path | str = None) -> None:
         self.wd = None
         self.set_working_dir(working_directory)
+        self.session_cache = None
+        self.iteration_id = None
 
     @classmethod
     def specification(cls):
@@ -31,16 +35,22 @@ class Tool:
         # Change the working directory
         os.chdir(self.wd)
 
+    def run_tool(self, name, args, session_cache, iteration_id):
+        self.session_cache = session_cache
+        self.iteration_id = iteration_id
+
+        f = getattr(self, name)
+        args = json.loads(args)
+        return f(**args)
+
 
 class Done(Exception):
     """We're done with the session"""
     pass
 
-
 class PPTools(Tool):
     """Functions that the AI assistant can use to run python code, remember
     facts and store, search and retrieve documents.
-
 
     """
 
@@ -85,6 +95,7 @@ class PPTools(Tool):
 
         """
         try:
+
             mid, o = self.ipy.exec(code)
             v = self.get_code_var('_')
             return v

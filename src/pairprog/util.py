@@ -36,7 +36,10 @@ def generate_tools_specification(cls: Type) -> List[Dict[str, Any]]:
     functions_spec = []
 
     for name, method in inspect.getmembers(cls, inspect.isfunction):
-        if name.startswith("__"):
+        if name.startswith("_"):
+            continue
+
+        if name in cls.exclude_methods:
             continue
 
         sig = inspect.signature(method)

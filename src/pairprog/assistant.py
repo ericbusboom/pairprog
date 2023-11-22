@@ -286,9 +286,8 @@ class Assistant:
             self.session_cache[self.iter_key('tool_call')] = {**m, "when":"pre"}
 
             try:
-                f = getattr(self.tools, tool_call.function.name)
-                args = json.loads(tool_call.function.arguments)
-                r = f(**args)
+                r = self.tools.run_tool(tool_call.function.name , tool_call.function.arguments, self.session_cache, self.iter_key('tool_call'))
+
             except Exception as e:
                 e_msg = f"Failed to call tool '{tool_call.function.name}' with args '{tool_call.function.arguments}': {e} "
                 logger.error(e_msg)
