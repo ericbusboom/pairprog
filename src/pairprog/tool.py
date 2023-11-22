@@ -12,18 +12,21 @@ from pairprog.ipython import IpyKernel
 from pairprog.objectstore import ObjectStore
 from pairprog.util import generate_tools_specification
 from .library import Library
-
+import subprocess
 
 class Tool:
     """Baseclass for AI tool"""
 
-    exclude_methods = ['__init__', 'set_working_dir', 'set_session_cache']
+    exclude_methods = ['__init__', 'set_working_dir',  'set_assistant',
+                       'set_session_cache', 'run_tool']
 
     def __init__(self, working_directory: Path | str = None) -> None:
         self.wd = None
         self.set_working_dir(working_directory)
         self.session_cache = None
         self.iteration_id = None
+        self.assistant = None
+
 
     @classmethod
     def specification(cls):
@@ -35,9 +38,10 @@ class Tool:
         # Change the working directory
         os.chdir(self.wd)
 
-    def run_tool(self, name, args, session_cache, iteration_id):
-        self.session_cache = session_cache
-        self.iteration_id = iteration_id
+    def set_assistant(self, assistant):
+        self.assistant = assistant
+
+    def run_tool(self, name, args):
 
         f = getattr(self, name)
         args = json.loads(args)
@@ -95,23 +99,14 @@ class PPTools(Tool):
 
         """
         try:
-
+            if self.assistant:
+                self.assistant.session_cache[self.iteration_id+'/code'] = code
             mid, o = self.ipy.exec(code)
-            v = self.get_code_var('_')
+            v = self.ipy.get_var('_')
             return v
         except Exception as e:
             return str(e)
 
-    def get_code_var(self, varname: str) -> Any:
-        """Retrieve the value of a variable from the IPython kernel as JSON.
-
-        Args:
-            varname (str): Name of the variable.
-
-        Returns:
-            Any: JSON representation of the variable's value.
-        """
-        return self.ipy.get_var(varname)
 
     def memorize(self, key: str, value: Any) -> None:
         """Store a value in the cache, associated with a key.
@@ -132,6 +127,32 @@ class PPTools(Tool):
             Any: The value retrieved from the cache.
         """
         return self.os[key]
+
+    def shell(self, command):
+        """
+        Runs a shell command and captures both stdout and stderr.
+
+        Args:
+            command (str): The command to run.
+        """
+
+
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        # Wait for the command to complete
+        stdout, stderr = process.communicate()
+
+        # Combine stdout and stderr
+        output = stdout + stderr
+
+        return output
+
 
     def store_document(self, title: str, text: str, description: str = None,
                        source: str = None, tags: list[str] = None) -> dict:
@@ -175,11 +196,19 @@ class PPTools(Tool):
         """
         return self.library.search(query)
 
-    def next_step(self, text: str):
-        """Write yourself a note that will be given to you on your next invocation.
-        You can use this end the current step in a process and start a new one"""
+    def smarter(self, text: str):
+        """Upgrade your inteligence to solve hard problems better. If you are
+        having trouble with a problem, try this function."""
 
-        return text
+        self.assistant.model = 'gpt-4-1106-preview'
+        return 'I am now smarter'
+
+    def faster_and_cheaper(self, text: str):
+        """If problems are not very hard, you can downgrade your inteligence
+        to solve them faster and cheaper."""
+
+        self.assistant.model = "gpt-3.5-turbo-1106"
+        return 'I am now faster and cheaper'
 
     def read(self, path: str, encoding=None) -> str:
         """
@@ -270,6 +299,10 @@ class TestCase(unittest.TestCase):
         r = tool.search_documents("How to prevent fatal diseases")
         self.assertEqual(r[0]['title'], 'Cleaning your Ears')
 
+    def test_shell(self):
+        tool = PPTools(None, None, Path('/Volumes/Cache/scratch'))
+        o = tool.execute_code("!ls")
+        print(o)
 
 if __name__ == "__main__":
     unittest.main()

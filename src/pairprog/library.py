@@ -240,7 +240,7 @@ class Library:
 
     def clear_collection(self):
         """Clear the collection"""
-        return self.client.collections["library"].documents.delete({"filter_by": "id:>0"})
+        return self.client.collections["library"].documents.delete({"filter_by": "chunk:>=0"})
 
     def list(self):
         """List all documents in the collection"""
@@ -254,7 +254,7 @@ class Library:
             yield d
 
     def count(self):
-        return len(self.list())
+        return len(list(self.list()))
 
     def _add_document(self, doc):
 

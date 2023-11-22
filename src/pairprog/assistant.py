@@ -13,7 +13,6 @@ from datetime import datetime
 from itertools import count
 import os
 
-
 logger = logging.getLogger(__name__)
 
 # from pydantic import BaseModel, Field
@@ -45,6 +44,7 @@ class Assistant:
             token_limit: int = 6000,  # max number of tokens to submit in messages
     ):
         self.tools = tool  # Functions to call, and function definitions
+        self.tools.set_assistant(self)
         self.func_spec = tool.specification()
 
         self.messages = messages or []
@@ -68,7 +68,7 @@ class Assistant:
 
         self.streaming = True
 
-        self.client  = openai.OpenAI()
+        self.client = openai.OpenAI()
 
         self.iter_key = lambda v: f"/none/{v}"
 
@@ -128,13 +128,18 @@ class Assistant:
     def stop(self):
         pass
 
+    def display(self, message, end='\n'):
+        """Display a message to the user"""
+        print(message, end=end)
+
     def complete_streaming(self, messages: List[dict[str, Any]], callback):
 
         r = self.client.chat.completions.create(
             messages=messages,
             tools=self.func_spec,
             model=self.model,
-            stream=True
+            stream=True,
+            timeout=10
         )
 
         chunks = []
@@ -225,7 +230,7 @@ class Assistant:
 
             def cb(delta):
                 if delta.content:
-                    print(delta.content, end='')
+                    self.display(delta.content, end='')
 
             if streaming:
                 message, r = self.complete_streaming(self.limited_messages, cb)
@@ -283,10 +288,13 @@ class Assistant:
                 "content": None
             }
 
-            self.session_cache[self.iter_key('tool_call')] = {**m, "when":"pre"}
+            self.session_cache[self.iter_key('tool_call')] = {**m,
+                                                              "args": tool_call.function.arguments,
+                                                              "when":"pre"}
 
             try:
-                r = self.tools.run_tool(tool_call.function.name , tool_call.function.arguments, self.session_cache, self.iter_key('tool_call'))
+                self.display(f"Calling tool '{tool_call.function.name}'")
+                r = self.tools.run_tool(tool_call.function.name , tool_call.function.arguments)
 
             except Exception as e:
                 e_msg = f"Failed to call tool '{tool_call.function.name}' with args '{tool_call.function.arguments}': {e} "
@@ -301,7 +309,9 @@ class Assistant:
             toks = len(self.tokenizer.encode(r))
 
             m['content'] = r
-            self.session_cache[self.iter_key('tool_call')] = {**m, "when":"post"}
+            self.session_cache[self.iter_key('tool_call')] = {**m,
+                                                              "args": tool_call.function.arguments,
+                                                               "when":"post"}
 
             logger.debug(f"Tool response ({toks} tokens): " + str(r)[:100].replace('\n',''))
 

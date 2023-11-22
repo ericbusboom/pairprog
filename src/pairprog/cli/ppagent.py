@@ -56,7 +56,14 @@ def parse_args(args):
     parser.add_argument(
         "-C",
         "--count",
-        help="List documents in the library",
+        help="Count documents in the library",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "-E",
+        "--export",
+        help="Export documents in the library",
         action="store_true",
     )
 
@@ -145,6 +152,9 @@ def main(args):
     elif args.count:
         print(assist.tools.library.count(),"documents")
         return
+    elif args.export:
+        for d in  assist.tools.library.list():
+            print(d)
     elif args.prompt:
 
         line = ' '.join(args.prompt)
