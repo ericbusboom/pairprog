@@ -1,0 +1,46 @@
+version: '3.5'
+
+services:
+
+  redis:
+    image: redis:6.2-alpine
+    restart: always
+    ports:
+        - '6379:6379'
+    command: redis-server --save 20 1 --loglevel warning 
+    volumes:
+        - redis:/data
+
+  typesense:
+    image: typesense/typesense:0.25.1
+    restart: on-failure
+    ports:
+      - "8108:8108"
+    volumes:
+      - ./typesense-data:/data
+    command: '--data-dir /data --api-key=xyz --enable-cors'
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+    environment:
+      # Without thiese, login with minioadmin/minioadmin
+      MINIO_ROOT_USER: eric
+      MINIO_ROOT_PASSWORD: whatever
+    volumes:
+      - minio:/data
+    command: server --console-address ":9001" /data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+
+volumes:
+  redis:
+  minio:
+

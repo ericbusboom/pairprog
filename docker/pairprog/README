@@ -1,0 +1,9 @@
+
+Instructions for installing Milvus: 
+
+    https://milvus.io/docs/v2.0.x/install_standalone-docker.md
+    
+wget https://github.com/milvus-io/milvus/releases/download/v2.0.2/milvus-standalone-docker-compose.yml -O docker-compose.yml
+
+sudo docker-compose up -d
+
