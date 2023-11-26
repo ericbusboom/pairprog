@@ -27,7 +27,6 @@ class Tool:
         self.iteration_id = None
         self.assistant = None
 
-
     @classmethod
     def specification(cls):
         """Return the specification for the tools available in this class."""
@@ -108,34 +107,14 @@ class PPTools(Tool):
             return str(e)
 
 
-    def memorize(self, key: str, value: Any) -> None:
-        """Store a value in the cache, associated with a key.
 
-        Args:
-            key (str): The key associated with the value.
-            value (Any): The value to be stored.
-        """
-        self.os[key] = value
-
-    def recall(self, key: str) -> Any:
-        """Retrieve a value from the cache using its key.
-
-        Args:
-            key (str): The key associated with the value.
-
-        Returns:
-            Any: The value retrieved from the cache.
-        """
-        return self.os[key]
-
-    def shell(self, command):
+    def shell(self, command:str):
         """
         Runs a shell command and captures both stdout and stderr.
 
         Args:
             command (str): The command to run.
         """
-
 
         process = subprocess.Popen(
             command,
@@ -152,7 +131,6 @@ class PPTools(Tool):
         output = stdout + stderr
 
         return output
-
 
     def store_document(self, title: str, text: str, description: str = None,
                        source: str = None, tags: list[str] = None) -> dict:
@@ -196,19 +174,6 @@ class PPTools(Tool):
         """
         return self.library.search(query)
 
-    def smarter(self, text: str):
-        """Upgrade your inteligence to solve hard problems better. If you are
-        having trouble with a problem, try this function."""
-
-        self.assistant.model = 'gpt-4-1106-preview'
-        return 'I am now smarter'
-
-    def faster_and_cheaper(self, text: str):
-        """If problems are not very hard, you can downgrade your inteligence
-        to solve them faster and cheaper."""
-
-        self.assistant.model = "gpt-3.5-turbo-1106"
-        return 'I am now faster and cheaper'
 
     def read(self, path: str, encoding=None) -> str:
         """
@@ -233,29 +198,8 @@ class PPTools(Tool):
             encoding (str, optional): The encoding to use for writing the file.
         """
         self.fs.write(path, b, encoding=encoding)
+        return f"wrote {len(b)} bytes to {path}"
 
-    def ls(self, path: str) -> list:
-        """
-        List files in a directory.
-
-        Args:
-            path (str): The path to the directory.
-
-        Returns:
-            list: A list of file names in the specified directory.
-        """
-        return self.fs.ls(path)
-
-    def hello(self, what: str):
-        """Say hello to someone.
-
-        Args:
-            what (str): The name of the person to say hello to.
-
-        Returns:
-            str: A greeting.
-        """
-        return f"Hello {what}!"
 
 class TestCase(unittest.TestCase):
 
