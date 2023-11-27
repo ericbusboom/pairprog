@@ -147,7 +147,7 @@ def move_toks(toks, pos, n):
 
     return pos
 
-def process_content(text, chunk_size=1000, chunk_overlap=50):
+def process_content(text, chunk_size=500, chunk_overlap=50):
     """
     Process content from a URL or file path. Extracts and chunks text from PDF, HTML, or plain text.
 

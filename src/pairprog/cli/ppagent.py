@@ -68,6 +68,12 @@ def parse_args(args):
     )
 
     parser.add_argument(
+        "-I",
+        "--index",
+        help="Index a document pyt path or url"
+    )
+
+    parser.add_argument(
         "-o",
         "--once",
         help="Just run the command line request; don't loop",
@@ -78,6 +84,13 @@ def parse_args(args):
         "--version",
         action="version",
         version=f"pairprog {__version__}",
+    )
+
+    parser.add_argument(
+        "-m",
+        "--model",
+        default="gpt-3.5-turbo-1106",
+        help="Index a document pyt path or url"
     )
 
     parser.add_argument(
@@ -155,6 +168,10 @@ def main(args):
     elif args.export:
         for d in  assist.tools.library.list():
             print(d)
+    elif args.index:
+        d = assist.tools.library.add_document(source=args.index)
+        print(d)
+
     elif args.prompt:
 
         line = ' '.join(args.prompt)

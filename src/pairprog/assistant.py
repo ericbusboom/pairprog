@@ -3,6 +3,7 @@ import logging
 import os
 import unittest
 import uuid
+from copy import deepcopy
 from datetime import datetime
 from itertools import count
 from pathlib import Path
@@ -14,7 +15,6 @@ import tiktoken
 from .objectstore import ObjectStore, resolve_cache
 from .tool import Done
 from .tool import PPTools, Tool
-from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +37,11 @@ def render_message_dict(m):
 
     return m
 
+
 class History:
 
     def __init__(self, messages):
         pass
-
-
 
 
 class Assistant:
@@ -53,7 +52,7 @@ class Assistant:
             messages: List[dict[str, Any]] = None,
             model="gpt-3.5-turbo-1106",
             cache: Optional[dict | ObjectStore] = None,
-            token_limit: int = 6000,  # max number of tokens to submit in messages
+            token_limit: int = None,  # max number of tokens to submit in messages
     ):
         self.tools = tool  # Functions to call, and function definitions
         self.tools.set_assistant(self)
@@ -65,9 +64,9 @@ class Assistant:
 
         self.run_id = None
 
+        self.models = None
+        self.model, self.token_limit = self.select_model(model, token_limit)
 
-        self.model = model
-        self.token_limit = token_limit
         self.tokenizer = tiktoken.encoding_for_model(self.model)
 
         self.session_id = datetime.now().isoformat() + '-' + str(uuid.uuid4())
@@ -84,6 +83,28 @@ class Assistant:
 
         self.iter_key = lambda v: f"/none/{v}"
 
+        self.system = {
+            'role': 'system',
+            'content': Path(__file__).parent.joinpath('system.txt').read_text()
+        }
+
+    def select_model(self, model, token_limit):
+        """Resolve sort model codes to model names, and return the model name and token limit"""
+
+        models_json = Path(__file__).parent.joinpath('models.json').read_text()
+        models = json.loads(models_json)
+
+        self.models = {m['model_name']: m for m in models}
+
+        if str(model) == '3.5':
+            model = "gpt-3.5-turbo-1106"
+        elif str(model) == '4':
+            model = "gpt-4-32k"
+
+        d = self.models[model]
+
+        return d['model_name'], token_limit or (d['context_window'] - d['output_tokens'])
+
     def display(self, m):
         """Display a message to the user"""
         print(m)
@@ -95,7 +116,8 @@ class Assistant:
         return self.messages[-1]
 
     def request_messages(self, messages=None, max_tokens=None, elide_args=True):
-        """Return a set of request messages that are less than the token limit"""
+        """Return a set of request messages that are less than the token limit, and
+        perform some other editing, such as eliding the arguments form tool requests"""
         if max_tokens is None:
             max_tokens = self.token_limit
 
@@ -118,13 +140,17 @@ class Assistant:
             else:
                 break
 
-        return rm
+        # Remote gets cranky if you have a tool call response with
+        # no tool calls, so remove it if it is there
+        if 'tool_call_id' in rm[0]:
+            rm = rm[1:]
+
+        return [self.system] + rm
 
     def stop(self):
         pass
 
     def print_content_cb(self, chunk):
-        import time
         # clear_output(wait=True)
 
         content = chunk.choices[0].delta.content
@@ -196,11 +222,12 @@ class Assistant:
 
             # Clean up the content response so that it is just the content, not any tool calls or other
             # stuff
-            self.messages.append({'role':'assistant', 'content':chunk.choices[0].delta.content})
+            self.messages.append({'role': 'assistant', 'content': chunk.choices[0].delta.content})
 
             self.responses.append(responses)
             self.chunks.append(chunk)
 
+            # Save these to the cache for later analysis or debugging
             self.session_cache['messages'] = self.messages
             self.session_cache['responses'] = self.responses
             self.session_cache['chunks'] = self.chunks
@@ -231,10 +258,11 @@ class Assistant:
         return finish_reason
 
     def count_tokens(self, r):
-        toks = len(self.tokenizer.encode(r))
 
-        if toks > self.token_limit / 2:
-            r = 'ERROR: Response too long to return to model. Try to make it smaller'
+        if not isinstance(r, str):
+            r = json.dumps(r, indent=2)
+
+        return len(self.tokenizer.encode(r))
 
     def call_function(self, chunk):
         """Call a function references in the response, the add the function result to the messages"""
@@ -261,6 +289,14 @@ class Assistant:
 
                 if not isinstance(r, str):
                     r = json.dumps(r, indent=2)
+
+                toks = self.count_tokens(r)
+
+                if toks > self.token_limit / 2:
+                    max_preview = int(len(r) / toks * (self.token_limit / 4))
+
+                    r = 'ERROR: Response too long to return to model. Try to make it smaller. ' + \
+                        'Here is the first part of the response: \n\n' + r[:max_preview]
 
                 m['content'] = r
                 messages.append(m)

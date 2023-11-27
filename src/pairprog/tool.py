@@ -1,23 +1,26 @@
 import json
 import os
+import subprocess
 import unittest
 from functools import cached_property
-
 from pathlib import Path
-from typesense import Client
 from typing import Any
+
 import typesense
+import wikipedia
+from typesense import Client
+
 from pairprog.filesystem import FSAccess
 from pairprog.ipython import IpyKernel
 from pairprog.objectstore import ObjectStore
 from pairprog.util import generate_tools_specification
 from .library import Library
-import subprocess
+
 
 class Tool:
     """Baseclass for AI tool"""
 
-    exclude_methods = ['__init__', 'set_working_dir',  'set_assistant',
+    exclude_methods = ['__init__', 'set_working_dir', 'set_assistant',
                        'set_session_cache', 'run_tool']
 
     def __init__(self, working_directory: Path | str = None) -> None:
@@ -41,7 +44,6 @@ class Tool:
         self.assistant = assistant
 
     def run_tool(self, name, args):
-
         f = getattr(self, name)
         args = json.loads(args)
         return f(**args)
@@ -50,6 +52,7 @@ class Tool:
 class Done(Exception):
     """We're done with the session"""
     pass
+
 
 class PPTools(Tool):
     """Functions that the AI assistant can use to run python code, remember
@@ -99,16 +102,28 @@ class PPTools(Tool):
         """
         try:
             if self.assistant:
-                self.assistant.session_cache[self.iteration_id+'/code'] = code
+                self.assistant.session_cache[self.iteration_id + '/code'] = code
             mid, o = self.ipy.exec(code)
             v = self.ipy.get_var('_')
             return v
         except Exception as e:
             return str(e)
 
+    def smarter(self, text: str):
+        """Upgrade your intelligence to solve hard problems better. If you are
+        having trouble with a problem, try this function."""
 
+        self.assistant.model = 'gpt-4-1106-preview'
+        return 'I am now smarter'
 
-    def shell(self, command:str):
+    def faster_and_cheaper(self, text: str):
+        """If problems are not very hard, you can downgrade your inteligence
+        to solve them faster and cheaper."""
+
+        self.assistant.model = "gpt-3.5-turbo-1106"
+        return 'I am now faster and cheaper'
+
+    def shell(self, command: str):
         """
         Runs a shell command and captures both stdout and stderr.
 
@@ -121,7 +136,7 @@ class PPTools(Tool):
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            # text=True
         )
 
         # Wait for the command to complete
@@ -130,11 +145,39 @@ class PPTools(Tool):
         # Combine stdout and stderr
         output = stdout + stderr
 
-        return output
+        return output.decode('utf-8', 'replace')
 
-    def store_document(self, title: str, text: str, description: str = None,
+    def web_search(self, query: str):
+        """
+        Search the web for a query.
+
+        Args:
+            query (str): The query string to search for.
+        """
+        from duckduckgo_search import DDGS
+
+        with DDGS() as ddgs:
+            results = [r for r in ddgs.text(query, max_results=5)]
+            return json.dumps(results, indent=2)
+
+    def store_document(self, title: str = None, text: str = None,
+                       description: str = None,
                        source: str = None, tags: list[str] = None) -> dict:
         """Store a document in the library.
+
+        To store a large document, provide just its url as the source:
+
+            store_document(source=url)
+
+        To store a wikipedial page, get it's store_document_uri from the
+        wikipedia_search tool and provide that as the source:
+
+            store_document(source='wiki:25080699')
+
+        Smaller documents, especially ones you've generated yourself,
+        can be stored with the remaining arguments,
+
+            store_document(title='my document', text='...long text...', source='self')
 
         Args:
             title (str): Title of the document.
@@ -146,6 +189,13 @@ class PPTools(Tool):
         Returns:
             dict: A dictionary with non-None arguments used in the document.
         """
+
+        if source.startswith('wiki:'):
+            _, pageid = source.split(':')
+            page = wikipedia.page(pageid=int(pageid))
+            text = page.content
+            description = page.summary[:250]
+
         return self.library.add_document(
             title=title, text=text,
             description=description,
@@ -163,17 +213,26 @@ class PPTools(Tool):
         """
         return self.library.get_document(key)
 
-    def search_documents(self, query: str) -> list:
+    def search_documents(self, query: str, result_number: int) -> dict:
         """Search for documents in the library that match a given query.
+
+        To properly use this function, call it with a query and result_number=0,
+        to get the first result. Then, call it again with the same query and result_number=1,
+        increasing the result_number until you find the document you are looking for,
+        or until the function returns None
 
         Args:
             query (str): The search query.
-
+            result_number (int): (Optional) Which result document to return
         Returns:
-            list: A list of documents that match the query.
+            dict|None: A list of documents that match the query.
         """
-        return self.library.search(query)
 
+        d = self.library.search(query)
+        try:
+            return d[result_number]
+        except IndexError:
+            return None
 
     def read(self, path: str, encoding=None) -> str:
         """
@@ -199,6 +258,27 @@ class PPTools(Tool):
         """
         self.fs.write(path, b, encoding=encoding)
         return f"wrote {len(b)} bytes to {path}"
+
+    def wikipedia_search(self, term: str):
+        """Return the names of wikipedia pages that match the search term
+
+        """
+
+        o = []
+        for page in wikipedia.search(term, results=10):
+            p = wikipedia.page(page, auto_suggest=False)
+            o.append({
+                'page_name': page,
+                'pageid': p.pageid,
+                'store_document_uri': f'wiki:{p.pageid}',
+                'url': p.url,
+                'summary': p.summary[:400]
+            })
+
+        return o
+
+    def wikipedia_page(self, page_name: str):
+        pass
 
 
 class TestCase(unittest.TestCase):
@@ -247,6 +327,7 @@ class TestCase(unittest.TestCase):
         tool = PPTools(None, None, Path('/Volumes/Cache/scratch'))
         o = tool.execute_code("!ls")
         print(o)
+
 
 if __name__ == "__main__":
     unittest.main()
