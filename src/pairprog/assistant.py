@@ -5,13 +5,12 @@ import uuid
 from copy import deepcopy
 from datetime import datetime
 from itertools import count
-from typing import Optional
 
 import openai
 import tiktoken
 
-from .objectstore import ObjectStore, resolve_cache
-from .tool import Done, PPTools, Tool, TaskState
+from .objectstore import ObjectStore
+from .tool import Done, PPTools, TaskState
 from .util import *
 
 logger = logging.getLogger(__name__)
@@ -34,12 +33,12 @@ specializations = {
 
 
 class Assistant:
+    tools: PPTools = None
 
     def __init__(
             self,
             messages: List[dict[str, Any]] = None,
             model="gpt-3.5-turbo-1106",
-            cache: Optional[dict | ObjectStore] = None,
             token_limit: int = None,  # max number of tokens to submit in messages
     ):
 
@@ -56,10 +55,6 @@ class Assistant:
 
         self.session_id = datetime.now().isoformat() + '-' + str(uuid.uuid4())
 
-        self.cache = resolve_cache(cache)
-        self.session_cache = self.cache.sub("session/" + self.session_id)
-        self.file_cache = self.session_cache.sub("files")
-
         self.client = openai.OpenAI()
 
         self.iter_key = lambda v: f"/none/{v}"
@@ -67,7 +62,7 @@ class Assistant:
         self.task_state = TaskState.NONE
         self.task_description = ''
 
-    def set_tools(self, tools: Tool):
+    def set_tools(self, tools: PPTools):
         self.tools = tools
         self.tools.set_assistant(self)
 
@@ -90,7 +85,7 @@ class Assistant:
             model = "gpt-3.5-turbo-1106"
         elif str(model) == '4':
             model = "gpt-4"
-        elif not model in self.models:
+        elif model not in self.models:
             raise Exception(f"Unknown model: {model}")
 
         d = self.models[model]
@@ -199,13 +194,15 @@ class Assistant:
 
         return chunk, responses
 
-    def _run(self, prompt: str | List[dict[str, Any]], streaming=True, **kwargs) -> str:
+    def _run(self, prompt: str | List[dict[str, Any]], streaming=True, **kwargs) -> str | None:
         """Run a  completion request loop"""
 
         if isinstance(prompt, str):
             self.messages.append({"role": "user", "content": prompt})
         else:
             self.messages.extend(prompt)
+
+        finish_reason = None
 
         for iteration in count():
 
@@ -228,27 +225,22 @@ class Assistant:
             self.responses.append(responses)
             self.chunks.append(chunk)
 
-            # Save these to the cache for later analysis or debugging
-            self.session_cache['messages'] = self.messages
-            self.session_cache['responses'] = self.responses
-            self.session_cache['chunks'] = self.chunks
-
             finish_reason = chunk.choices[0].finish_reason
 
             match finish_reason:
                 case "stop" | "content_filter":
                     self.stop()
-                    return self.last_content
+                    return finish_reason
                 case "length":
                     self.stop()
-                    return self.last_content
+                    return finish_reason
                 case "function_call" | "tool_calls":
                     try:
                         messages = self.call_function(chunk)
                         self.messages.extend(messages)
                     except Done:
                         self.stop()
-                        return self.last_content
+                        return finish_reason
 
                 case "null":
                     pass  # IDK what to do here.
@@ -258,7 +250,7 @@ class Assistant:
 
         return finish_reason
 
-    def run(self, line=None):
+    def run(self, line=None) -> Any:
 
         line = line.strip() if line else None
         line = line if line else None
@@ -314,9 +306,6 @@ class Assistant:
             elif line == 'spec':
                 print(json.dumps(self.tools.specification(), indent=2))
                 return ''
-            elif line == 'continue':
-                self.task_state = TaskState.AUTO_CONTINUE
-                line = self.continue_prompt
             elif line.startswith('task'):
                 # Start task mode
                 self.task_state = TaskState.ANALYZE
@@ -411,7 +400,7 @@ class MyTestCase(unittest.TestCase):
 
         tool = TaskManager(ts, rc.sub('task-manager'), Path('/Volumes/Cache/scratch'))
 
-        assis = Assistant(cache=rc)
+        assis = Assistant()
         assis.set_tools(tool)
 
         assis.run("what time will it be in one and one half hours? I am in the Pacific time zone")
@@ -437,9 +426,9 @@ class MyTestCase(unittest.TestCase):
             }
         )
 
-        tool = PPTools(ts, rc.sub('pptools'), Path('/Volumes/Cache/scratch'))
+        tool = PPTools(ts, Path('/Volumes/Cache/scratch'))
 
-        assis = Assistant(tool, cache=rc)
+        assis = Assistant(None)
 
         assis.run("Search your filesystem for information about eric")
 
