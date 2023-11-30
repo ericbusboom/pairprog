@@ -1,62 +1,47 @@
 import json
 import logging
-import os
 import unittest
 import uuid
 from copy import deepcopy
 from datetime import datetime
 from itertools import count
-from pathlib import Path
-from typing import List, Optional, Any
+from typing import Optional
 
 import openai
 import tiktoken
 
 from .objectstore import ObjectStore, resolve_cache
-from .tool import Done
-from .tool import PPTools, Tool
+from .tool import Done, PPTools, Tool, TaskState
+from .util import *
 
 logger = logging.getLogger(__name__)
 
-
-# from pydantic import BaseModel, Field
-
-def render_message_dict(m):
-    from openai.types.chat.chat_completion_chunk import ChoiceDelta
-
-    if isinstance(m, dict):
-        pass
-    elif isinstance(m, ChoiceDelta):
-        m = m.model_dump()
-
-    if 'function_call' in m:
-        del m['function_call']
-
-    if 'tool_calls' in m and not m['tool_calls']:
-        del m['tool_calls']
-
-    return m
-
-
-class History:
-
-    def __init__(self, messages):
-        pass
+# The specialized prompts for each state. The
+# first is the auto continue prompt, which is Null when auto continue is off
+# The second is the prompt is included in the system prompt
+specializations = {
+    TaskState.NONE: [None, ''],
+    TaskState.ANALYZE: [
+        '[ You are analyzing a task. Remember to call start_task(task_description="...") to start the task ]',
+        get_prompt('analyze_task')
+    ],
+    TaskState.INTASK: [
+        '[ You are working on a task:\n\n```\n{task_description}\n```\n\nRemember to call  done_with_task() when you are done ]',
+        get_prompt('in_task')
+    ],
+    TaskState.AUTO_CONTINUE: ['Continue with task. If you are done with the task, call the done_with_task()', '']
+}
 
 
 class Assistant:
+
     def __init__(
             self,
-            tool: Tool,
-            working_directory: str = None,  # Path to a working directory
             messages: List[dict[str, Any]] = None,
             model="gpt-3.5-turbo-1106",
             cache: Optional[dict | ObjectStore] = None,
             token_limit: int = None,  # max number of tokens to submit in messages
     ):
-        self.tools = tool  # Functions to call, and function definitions
-        self.tools.set_assistant(self)
-        self.func_spec = tool.specification()
 
         self.messages = messages or []
         self.responses = []
@@ -75,18 +60,23 @@ class Assistant:
         self.session_cache = self.cache.sub("session/" + self.session_id)
         self.file_cache = self.session_cache.sub("files")
 
-        self.wd = working_directory or os.getcwd()
-        os.chdir(self.wd)
-        self.tools.set_working_dir(self.wd)
-
         self.client = openai.OpenAI()
 
         self.iter_key = lambda v: f"/none/{v}"
 
-        self.system = {
-            'role': 'system',
-            'content': Path(__file__).parent.joinpath('system.txt').read_text()
-        }
+        self.task_state = TaskState.NONE
+        self.task_description = ''
+
+    def set_tools(self, tools: Tool):
+        self.tools = tools
+        self.tools.set_assistant(self)
+
+    @property
+    def func_spec(self):
+        if self.tools:
+            return self.tools.specification()
+        else:
+            return None
 
     def select_model(self, model, token_limit):
         """Resolve sort model codes to model names, and return the model name and token limit"""
@@ -99,7 +89,9 @@ class Assistant:
         if str(model) == '3.5':
             model = "gpt-3.5-turbo-1106"
         elif str(model) == '4':
-            model = "gpt-4-32k"
+            model = "gpt-4"
+        elif not model in self.models:
+            raise Exception(f"Unknown model: {model}")
 
         d = self.models[model]
 
@@ -128,7 +120,8 @@ class Assistant:
             if 'tool_calls' in m and elide_args:
                 m = deepcopy(m)
                 for tc in m['tool_calls']:
-                    tc['function']['arguments'] = '<arguments elided>'
+                    pass
+                    # tc['function']['arguments'] = '<arguments elided>'
                 if 'function_call' in m:
                     del m['function_call']
 
@@ -142,10 +135,18 @@ class Assistant:
 
         # Remote gets cranky if you have a tool call response with
         # no tool calls, so remove it if it is there
-        if 'tool_call_id' in rm[0]:
+        if rm and 'tool_call_id' in rm[0]:
             rm = rm[1:]
 
-        return [self.system] + rm
+        specialization = specializations[self.task_state][1].format(
+            task_description=self.task_description
+        )
+
+        sm = self.tools.system_message().format(specialization=specialization)
+
+        logger.debug(log_debug(f"System message: {sm}"))
+
+        return [{'role': 'system', 'content': sm}] + rm
 
     def stop(self):
         pass
@@ -198,7 +199,7 @@ class Assistant:
 
         return chunk, responses
 
-    def run(self, prompt: str | List[dict[str, Any]], streaming=True, **kwargs) -> str:
+    def _run(self, prompt: str | List[dict[str, Any]], streaming=True, **kwargs) -> str:
         """Run a  completion request loop"""
 
         if isinstance(prompt, str):
@@ -257,6 +258,75 @@ class Assistant:
 
         return finish_reason
 
+    def run(self, line=None):
+
+        line = line.strip() if line else None
+        line = line if line else None
+
+        def getline():
+            return input('$> ')
+
+        match line, self.task_state:
+            case None, TaskState.NONE:  # No line, not in task
+                line = getline()
+            case _, TaskState.NONE:  # Line, in task
+                pass  # line provided in argument
+
+            case None, TaskState.ANALYZE:
+                line = getline()
+                line += "\n" + specializations[TaskState.ANALYZE][0]
+            case _, TaskState.ANALYZE:
+                line += "\n" + specializations[TaskState.ANALYZE][0]
+
+            case _, TaskState.INTASK:
+                # We don't prompt the user for input when in task mode
+                line = specializations[TaskState.INTASK][0].format(task_description=self.task_description)
+
+            case _, TaskState.AUTO_CONTINUE:
+                line = specializations[TaskState.AUTO_CONTINUE][0]
+
+            case _, _:
+                # This should never happen, but if it does, we need
+                # to reset the task state
+                self.task_state = TaskState.NONE
+                logger.error(log_error(f"Unknown task state: {self.task_state}"))
+                line = getline()
+
+        logger.info(log_debug(self.task_state.name))
+        logger.debug(log_debug(f"Line: {line}"))
+
+        if isinstance(line, str) and line.startswith('%'):
+            line = line[1:]
+            if line == 'stop':
+                raise Done
+            elif line == 'messages':
+                # Print messages array as json
+                print(json.dumps(self.messages, indent=2))
+                return ''
+            elif line == 'request':
+                # Print messages array as json
+                print(json.dumps(self.request_messages(), indent=2))
+                return ''
+            elif line == 'system':
+                # Print messages array as json
+                print(self.tools.system_message())
+                return ''
+            elif line == 'spec':
+                print(json.dumps(self.tools.specification(), indent=2))
+                return ''
+            elif line == 'continue':
+                self.task_state = TaskState.AUTO_CONTINUE
+                line = self.continue_prompt
+            elif line.startswith('task'):
+                # Start task mode
+                self.task_state = TaskState.ANALYZE
+                line = line.replace('task', '').strip()
+            else:
+                print(f"Unknown command %{line}")
+                return ''
+
+        return self._run(line)
+
     def count_tokens(self, r):
 
         if not isinstance(r, str):
@@ -269,10 +339,10 @@ class Assistant:
 
         delta = chunk.choices[0].delta
 
-        m = delta.model_dump()
-        m['content'] = ''
+        tool_request = delta.model_dump()
+        tool_request['content'] = ''
 
-        messages = [m]
+        messages = []
 
         for tool_call in delta.tool_calls:
 
@@ -283,9 +353,20 @@ class Assistant:
                 "content": None
             }
 
+            self.display(log_system(f"Calling tool '{tool_call.function.name}'({tool_call.function.arguments[:500]})"))
+
             try:
-                self.display(f"Calling tool '{tool_call.function.name}'")
                 r = self.tools.run_tool(tool_call.function.name, tool_call.function.arguments)
+            except Exception as e:
+
+                e_msg = f"Failed to call tool '{tool_call.function.name}' with args '{tool_call.function.arguments}': {e} "
+
+                logger.error(log_error(e_msg))
+                m['content'] = str(e_msg)
+                # messages.append(m)
+                return []
+
+            else:
 
                 if not isinstance(r, str):
                     r = json.dumps(r, indent=2)
@@ -298,25 +379,23 @@ class Assistant:
                     r = 'ERROR: Response too long to return to model. Try to make it smaller. ' + \
                         'Here is the first part of the response: \n\n' + r[:max_preview]
 
+                    logger.error(log_error('Response too long to return to model.'))
+                else:
+                    logger.info(log_system(f"Response: {r[:200]}"))
+
                 m['content'] = r
                 messages.append(m)
-
-            except Exception as e:
-                e_msg = f"Failed to call tool '{tool_call.function.name}' with args '{tool_call.function.arguments}': {e} "
-                logger.error(e_msg)
-                m['content'] = str(e_msg)
-                messages.append(m)
-
-        return messages
+        return [tool_request] + messages
 
 
 class MyTestCase(unittest.TestCase):
     def test_basic(self):
         import typesense
         from pathlib import Path
+        from pairprog.taskmachine import TaskManager, logger as tm_logger
 
         logging.basicConfig()
-        logger.setLevel(logging.DEBUG)
+        tm_logger.setLevel(logging.INFO)
 
         # rc = ObjectStore.new(bucket='test', class_='FSObjectStore', path='/tmp/cache')
 
@@ -330,13 +409,16 @@ class MyTestCase(unittest.TestCase):
             }
         )
 
-        tool = PPTools(ts, rc.sub('pptools'), Path('/Volumes/Cache/scratch'))
+        tool = TaskManager(ts, rc.sub('task-manager'), Path('/Volumes/Cache/scratch'))
 
-        assis = Assistant(tool, cache=rc)
+        assis = Assistant(cache=rc)
+        assis.set_tools(tool)
 
-        assis.run("Hi, can you tell me what tools you have access to?")
+        assis.run("what time will it be in one and one half hours? I am in the Pacific time zone")
 
-        assis.run("What is the sum of the first five digits of pi?")
+        print("=" * 80)
+
+        print(assis.request_messages())
 
     def test_codeand_store(self):
         import typesense

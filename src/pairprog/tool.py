@@ -1,10 +1,10 @@
+import enum
 import json
+import logging
 import os
 import subprocess
 import unittest
 from functools import cached_property
-from pathlib import Path
-from typing import Any
 
 import typesense
 import wikipedia
@@ -13,8 +13,17 @@ from typesense import Client
 from pairprog.filesystem import FSAccess
 from pairprog.ipython import IpyKernel
 from pairprog.objectstore import ObjectStore
-from pairprog.util import generate_tools_specification
 from .library import Library
+from .util import *
+
+logger = logging.getLogger(__name__)
+
+
+class TaskState(enum.Enum):
+    NONE = 1
+    ANALYZE = 2
+    INTASK = 3
+    AUTO_CONTINUE = 4
 
 
 class Tool:
@@ -23,6 +32,8 @@ class Tool:
     exclude_methods = ['__init__', 'set_working_dir', 'set_assistant',
                        'set_session_cache', 'run_tool']
 
+    include_methods = None
+
     def __init__(self, working_directory: Path | str = None) -> None:
         self.wd = None
         self.set_working_dir(working_directory)
@@ -30,10 +41,9 @@ class Tool:
         self.iteration_id = None
         self.assistant = None
 
-    @classmethod
-    def specification(cls):
+    def specification(self):
         """Return the specification for the tools available in this class."""
-        return generate_tools_specification(cls)
+        return generate_tools_specification(self.__class__)
 
     def set_working_dir(self, working_directory):
         self.wd = Path(working_directory)
@@ -44,8 +54,24 @@ class Tool:
         self.assistant = assistant
 
     def run_tool(self, name, args):
+
+        if name in self.exclude_methods:
+            raise NotImplemented(f"Method {name} is not available ( it is excluded)")
+
+        if self.include_methods and name not in self.include_methods:
+            raise NotImplementedError(f"Method {name} is not available ( it is not included)")
+
         f = getattr(self, name)
-        args = json.loads(args)
+        try:
+            args = json.loads(args)
+        except TypeError:
+            pass
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Bad arguments: {args} ( They should be valid JSON )")
+
+        if not isinstance(args, dict):
+            raise ValueError(f"Arguments must be a dictionary, not {type(args)}")
+
         return f(**args)
 
 
@@ -62,15 +88,21 @@ class PPTools(Tool):
 
     def __init__(self,
                  typesense_client: Client,
-                 object_store: ObjectStore,
+
                  working_dir: Path) -> None:
 
         super().__init__(working_dir)
 
         self.ts_client = typesense_client
-        self.os = object_store
 
         self.fs = FSAccess(self.wd)
+
+    def system_message(self):
+        from pairprog.util import get_prompt
+
+        sm = get_prompt('system')
+        # logger.info(log_system(sm))
+        return sm
 
     @cached_property
     def ipy(self) -> IpyKernel:
@@ -84,8 +116,8 @@ class PPTools(Tool):
         """A text search engine."""
         return Library(self.ts_client)
 
-    def execute_code(self, code: str) -> Any:
-        """Execute a code using the IPython kernel.
+    def execute_python(self, code: str) -> Any:
+        """Execute python code using the IPython kernel.
 
         The return will be the IPython display for the last line of the
         code. For more rigorous output, assign values you would want to
@@ -101,13 +133,11 @@ class PPTools(Tool):
 
         """
         try:
-            if self.assistant:
-                self.assistant.session_cache[self.iteration_id + '/code'] = code
             mid, o = self.ipy.exec(code)
             v = self.ipy.get_var('_')
             return v
         except Exception as e:
-            return str(e)
+            raise
 
     def smarter(self, text: str):
         """Upgrade your intelligence to solve hard problems better. If you are
@@ -234,7 +264,7 @@ class PPTools(Tool):
         except IndexError:
             return None
 
-    def read(self, path: str, encoding=None) -> str:
+    def read_file(self, path: str, encoding=None) -> str:
         """
         Read text from a file.
 
@@ -247,7 +277,7 @@ class PPTools(Tool):
         """
         return self.fs.read(path, encoding=encoding)
 
-    def write(self, path: str, b: str, encoding=None) -> None:
+    def write_file(self, path: str, b: str, encoding=None) -> None:
         """
         Write text to a file.
 
@@ -277,8 +307,31 @@ class PPTools(Tool):
 
         return o
 
-    def wikipedia_page(self, page_name: str):
-        pass
+    def start_task(self, task_description: str):
+        """Start a task with the specified analysis.
+
+        Args:
+            task_description (str): A string describing the analysis of the task.
+
+        Returns:
+            None
+        """
+        self.assistant.task_state = TaskState.INTASK
+        self.assistant.task_description = task_description
+
+        return "Starting task"
+
+    def done_with_task(self) -> str:
+        """Mark the most recent task as complete
+
+        Returns:
+            str: A message indicating the task is complete.
+
+        """
+        self.assistant.task_state = TaskState.NONE
+        self.assistant.task_description = ''
+
+        return "Thanks for your help!"
 
 
 class TestCase(unittest.TestCase):

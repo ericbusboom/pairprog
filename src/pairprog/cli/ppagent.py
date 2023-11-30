@@ -5,6 +5,7 @@ import argparse
 
 import logging
 import sys
+import json
 from pathlib import Path
 from typing import List
 # noinspection PyUnresolvedReferences
@@ -16,10 +17,10 @@ from pairprog import __version__
 from pairprog.assistant import Assistant
 from pairprog.objectstore import ObjectStore
 from pairprog.tool import PPTools
-
+from pairprog.util import *
+from pairprog.simpletaskmachine import TaskManager, logger as tm_logger
 
 from pairprog.assistant import logger as ass_logger
-
 
 __author__ = "Eric Busboom"
 __copyright__ = "Eric Busboom"
@@ -38,6 +39,10 @@ def parse_args(args):
       :obj:`argparse.Namespace`: command line parameters namespace
     """
     parser = argparse.ArgumentParser(description="Pair Programming Assistant")
+
+    parser.add_argument('-d', '--dir',
+                        type=Path, default=Path().cwd(),
+                        help='The directory to operate on.')
 
     parser.add_argument(
         "-D",
@@ -123,9 +128,10 @@ def setup_logging(loglevel):
     """
     #logformat = "[%(asctime)s] %(levelname)s:%(name)s:%(message)s"
     logging.basicConfig( )
+
     ass_logger.setLevel(loglevel or logging.FATAL)
 
-def init():
+def init(args):
     rc = ObjectStore.new(name='barker_minio', bucket='agent')
 
     ts = typesense.Client(
@@ -136,9 +142,14 @@ def init():
         }
     )
 
-    tool = PPTools(ts, rc.sub('pptools'), Path('/Volumes/Cache/scratch'))
+    #tool = TaskManager(ts, rc.sub('task-manager'), Path('/Volumes/Cache/scratch'))
 
-    assis = Assistant(tool, cache=rc)
+    tool = PPTools(ts, args.dir)
+
+    assis = Assistant(cache=rc, model=args.model)
+    assis.set_tools(tool)
+
+    ass_logger.info(assis.model)
 
     return assis
 
@@ -154,7 +165,7 @@ def main(args):
     args = parse_args(args)
     setup_logging(args.loglevel)
 
-    assist = init()
+    assist = init(args)
 
     if args.delete:
         print(assist.tools.library.clear_collection())
@@ -172,22 +183,21 @@ def main(args):
         d = assist.tools.library.add_document(source=args.index)
         print(d)
 
-    elif args.prompt:
+    else:
 
-        line = ' '.join(args.prompt)
+        line = ' '.join(args.prompt) if args.prompt else 'hello'
+
         while True:
-            if line.strip():
-                r = assist.run(line)
-                if False: # When streaming, output is done in the run loop
-                    print(r)
-                else:
-                    print()
+
+            r = assist.run(line)
+            line = None
+
+            if False: # When streaming, output is done in the run loop
+                print(r)
+            else:
+                print()
 
             if args.once:
-                break
-
-            line = input('$> ')
-            if line == 'stop':
                 break
 
 
@@ -197,7 +207,6 @@ def run():
     This function can be used as entry point to create console scripts with setuptools.
     """
     main(sys.argv[1:])
-
 
 if __name__ == "__main__":
     run()

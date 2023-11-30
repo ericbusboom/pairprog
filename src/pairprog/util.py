@@ -1,10 +1,12 @@
 import inspect
 from typing import Any, Dict, List, Type, get_type_hints
 
-from docstring_parser import parse
+from docstring_parser import parse, DocstringStyle
 from termcolor import colored
 
 from pydantic import BaseModel
+from pathlib import Path
+from colored import Fore, Back, Style
 
 
 def map_types(v):
@@ -16,7 +18,6 @@ def map_types(v):
         "Optional": "object",
     }.get(v, v)
 
-
 def get_pydantic_model_spec(model: Type[BaseModel]) -> Dict[str, Any]:
     """Generate specification for Pydantic model fields."""
     spec = {}
@@ -27,8 +28,7 @@ def get_pydantic_model_spec(model: Type[BaseModel]) -> Dict[str, Any]:
         }
     return spec
 
-
-def generate_tools_specification(cls: Type) -> List[Dict[str, Any]]:
+def generate_tools_specification(cls: Type, include_methods = [], exclude_methods=[]) -> List[Dict[str, Any]]:
     """
     Generates a tools specification from a class's methods, annotations, and docstrings
     using the docstring_parser module. It excludes the 'self' parameter from methods.
@@ -39,12 +39,18 @@ def generate_tools_specification(cls: Type) -> List[Dict[str, Any]]:
         if name.startswith("_"):
             continue
 
-        if name in cls.exclude_methods:
+        exclude_methods = exclude_methods or cls.exclude_methods
+        include_methods = include_methods or cls.include_methods
+
+        if name in exclude_methods:
+            continue
+
+        if include_methods and name not in include_methods:
             continue
 
         sig = inspect.signature(method)
         docstring = method.__doc__
-        parsed_docstring = parse(docstring) if docstring else None
+        parsed_docstring = parse(docstring, DocstringStyle.GOOGLE) if docstring else None
 
         function_spec = {
             "name": name,
@@ -210,3 +216,27 @@ def serialize(o: Any):
             return json.dumps(o)
         except TypeError:
             return repr(o)
+
+def get_prompt(prompt_name:str) -> str:
+    """Return a pre-configured prompt"""
+    return Path(__file__).parent.joinpath('prompts', prompt_name+'.txt').read_text()
+
+
+def log_system(s):
+    return f"{Fore.blue}{s}{Style.reset}"
+
+
+def log_user(s):
+    return f"{Fore.green}{s}{Style.reset}"
+
+
+def log_error(s):
+    return f"{Fore.red}{s}{Style.reset}"
+
+
+
+def log_spec(s):
+    return f"{Fore.yellow}{Back.black}{s}{Style.reset}"
+
+def log_debug(s):
+    return f"{Fore.red}{Style.bold}{s}{Style.reset}"

@@ -28,6 +28,7 @@ langchain = "*"
 pypdf2 = "*"
 markdownify = "*"
 textract = "*"
+colored = "*"
 
 [dev-packages]
 
