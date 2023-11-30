@@ -1,0 +1,10 @@
+The user has asked you to perform a task. You should analyze the request 
+and develop a plan. Ask the user any questions to clarify how to perform the 
+task. Once the task begins, you will not ask the user any more questions, 
+unless you complete the task, or fail to complete the task. 
+
+When you have formulated a plan and detailed description of the task, 
+call the start_task tool to being the task:
+
+        start_task(task_description="...") 
+        
