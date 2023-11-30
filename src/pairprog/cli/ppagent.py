@@ -2,31 +2,28 @@
 
 """
 import argparse
-
 import logging
-import sys
-import json
-from pathlib import Path
-from typing import List
 # noinspection PyUnresolvedReferences
 import readline
 import signal
+import sys
+from typing import List
 
 import typesense
+
 from pairprog import __version__
 from pairprog.assistant import Assistant
+from pairprog.assistant import logger as ass_logger
 from pairprog.objectstore import ObjectStore
 from pairprog.tool import PPTools
 from pairprog.util import *
-from pairprog.simpletaskmachine import TaskManager, logger as tm_logger
-
-from pairprog.assistant import logger as ass_logger
 
 __author__ = "Eric Busboom"
 __copyright__ = "Eric Busboom"
 __license__ = "MIT"
 
 _logger = logging.getLogger(__name__)
+
 
 def parse_args(args):
     """Parse command line parameters
@@ -126,10 +123,11 @@ def setup_logging(loglevel):
     Args:
       loglevel (int): minimum loglevel for emitting messages
     """
-    #logformat = "[%(asctime)s] %(levelname)s:%(name)s:%(message)s"
-    logging.basicConfig( )
+    # logformat = "[%(asctime)s] %(levelname)s:%(name)s:%(message)s"
+    logging.basicConfig()
 
     ass_logger.setLevel(loglevel or logging.FATAL)
+
 
 def init(args):
     rc = ObjectStore.new(name='barker_minio', bucket='agent')
@@ -142,7 +140,7 @@ def init(args):
         }
     )
 
-    #tool = TaskManager(ts, rc.sub('task-manager'), Path('/Volumes/Cache/scratch'))
+    # tool = TaskManager(ts, rc.sub('task-manager'), Path('/Volumes/Cache/scratch'))
 
     tool = PPTools(ts, args.dir)
 
@@ -153,11 +151,14 @@ def init(args):
 
     return assis
 
+
 def signal_handler(sig, frame):
     print("\nExiting the program.")
     sys.exit(0)
 
+
 signal.signal(signal.SIGINT, signal_handler)
+
 
 def main(args):
     """
@@ -171,13 +172,14 @@ def main(args):
         print(assist.tools.library.clear_collection())
         return
     elif args.list:
-        for d in  assist.tools.library.list():
-            print(f"{d['id']:>4s}:{d['chunk']:<05d} {d['title'][:20]:20s} {d.get('description','')[:50]:50s} {d.get('source','')[:15]}")
+        for d in assist.tools.library.list():
+            print(
+                f"{d['id']:>4s}:{d['chunk']:<05d} {d['title'][:20]:20s} {d.get('description', '')[:50]:50s} {d.get('source', '')[:15]}")
     elif args.count:
-        print(assist.tools.library.count(),"documents")
+        print(assist.tools.library.count(), "documents")
         return
     elif args.export:
-        for d in  assist.tools.library.list():
+        for d in assist.tools.library.list():
             print(d)
     elif args.index:
         d = assist.tools.library.add_document(source=args.index)
@@ -192,7 +194,7 @@ def main(args):
             r = assist.run(line)
             line = None
 
-            if False: # When streaming, output is done in the run loop
+            if False:  # When streaming, output is done in the run loop
                 print(r)
             else:
                 print()
@@ -207,6 +209,7 @@ def run():
     This function can be used as entry point to create console scripts with setuptools.
     """
     main(sys.argv[1:])
+
 
 if __name__ == "__main__":
     run()
